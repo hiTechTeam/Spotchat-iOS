@@ -505,7 +505,7 @@ private extension ChatTransportEventCoordinator {
         case .voiceFrame:
             context.handleVoiceFramePayload(from: peerID, payload: payload, timestamp: timestamp)
 
-        case .privateFile, .authenticatedPeerState:
+        case .privateFile, .authenticatedPeerState, .spotchatProfile:
             // BLEService validates and persists decrypted private files before
             // emitting a normal `.messageReceived` event, and consumes peer
             // state inside the transport. Neither payload crosses this

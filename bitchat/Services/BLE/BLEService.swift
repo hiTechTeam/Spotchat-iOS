@@ -4358,6 +4358,11 @@ extension BLEService {
 
 
     
+    func sendSpotchatProfile(_ data: Data, to peer: PeerID) {
+        guard data.count <= SpotchatProfilePacket.maxWireBytes, isPeerConnected(peer) else { return }
+        sendNoisePayload(NoisePayload(type: .spotchatProfile, data: data).encode(), to: peer)
+    }
+
     private func sendNoisePayload(_ typedPayload: Data, to peerID: PeerID) {
         // Hop like sendMessage: the Transport-facing wrappers (verify/vouch/
         // group payloads) call this from the main actor, and the send path

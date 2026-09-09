@@ -74,6 +74,7 @@ import BitFoundation
 /// The first byte of decrypted Noise payload indicates the type.
 /// This provides privacy - observers can't distinguish message types.
 enum NoisePayloadType: UInt8 {
+    case spotchatProfile = 0x40    // Spotchat versioned profile and avatar chunks
     // Messages and status
     case privateMessage = 0x01      // Private chat message
     case readReceipt = 0x02         // Message was read
@@ -114,6 +115,7 @@ enum NoisePayloadType: UInt8 {
 
     var description: String {
         switch self {
+        case .spotchatProfile: return "spotchatProfile"
         case .privateMessage: return "privateMessage"
         case .readReceipt: return "readReceipt"
         case .delivered: return "delivered"

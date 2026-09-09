@@ -6,7 +6,7 @@ struct SpotchatRootView: View {
     @ObservedObject var runtime: SpotchatRuntime
     @State private var path: [SpotchatPeer] = []
     @State private var showProfile = false
-    @State private var name = ""
+    @State private var selectedPeer: SpotchatPeer?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -17,6 +17,7 @@ struct SpotchatRootView: View {
                             peerRow(peer)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu { Button("Посмотреть профиль") { selectedPeer = peer } }
                         .listRowInsets(EdgeInsets(top: 11, leading: 16, bottom: 11, trailing: 18))
                         .alignmentGuide(.listRowSeparatorLeading) { _ in 72 }
                     }
@@ -51,8 +52,8 @@ struct SpotchatRootView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 SpotchatAvatarToolbar {
-                    Button { name = runtime.nickname; showProfile = true } label: {
-                        SpotchatAvatar(name: runtime.nickname, size: 34)
+                    Button { showProfile = true } label: {
+                        SpotchatAvatar(name: runtime.nickname, size: 34, imageData: runtime.profiles.own.avatar)
                             .frame(width: 44, height: 44).contentShape(Circle())
                     }.buttonStyle(.plain).accessibilityLabel("Мой профиль")
                 }
@@ -60,37 +61,20 @@ struct SpotchatRootView: View {
             .navigationDestination(for: SpotchatPeer.self) { peer in
                 SpotchatConversationView(runtime: runtime, peer: peer)
             }
-            .sheet(isPresented: $showProfile) {
-                NavigationStack {
-                    VStack(spacing: 22) {
-                        SpotchatAvatar(name: name, size: 76).padding(.top, 14)
-                        VStack(alignment: .leading, spacing: 10) {
-                            TextField("Ваше имя", text: $name).font(.body)
-                                .textInputAutocapitalization(.words)
-                                .padding(15).background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-                            Text("Это имя увидят люди рядом.")
-                                .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 4)
-                        }.padding(.horizontal, 20)
-                        Spacer(minLength: 0)
-                    }
-                    .background(Color(.systemGroupedBackground))
-                    .navigationTitle("Мой профиль").navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Готово") { if runtime.saveNickname(name) { showProfile = false } }.fontWeight(.semibold)
-                        }
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button { showProfile = false } label: { Image(systemName: "xmark") }
-                                .accessibilityLabel("Закрыть")
-                        }
-                    }
-                }.presentationDetents([.medium]).presentationDragIndicator(.visible)
+            .sheet(isPresented: $showProfile) { SpotchatOwnProfileSheet(runtime: runtime) }
+            .sheet(item: $selectedPeer) { peer in
+                SpotchatPeerProfileSheet(runtime: runtime, peer: peer) {
+                    selectedPeer = nil
+                    path.append(peer)
+                }
             }
             .alert("Spotchat", isPresented: Binding(get: { runtime.error != nil }, set: { if !$0 { runtime.error = nil } })) {
                 Button("Понятно") { runtime.error = nil }
             } message: { Text(runtime.error ?? "") }
             #if DEBUG && targetEnvironment(simulator)
             .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewProfile") { showProfile = true }
+                if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewPeerProfile") { selectedPeer = runtime.peers.first }
                 if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewChat"), path.isEmpty,
                    let peer = runtime.peers.first { path = [peer] }
             }
@@ -102,10 +86,10 @@ struct SpotchatRootView: View {
         let last = runtime.conversation(peer.id).last
         let unread = runtime.unreadCount(for: peer.id)
         return HStack(spacing: 14) {
-            SpotchatAvatar(name: peer.name, size: 58, nearby: runtime.isNearby(peer.id))
+            SpotchatAvatar(name: runtime.displayName(peer), size: 58, nearby: runtime.isNearby(peer.id), imageData: runtime.profiles.remote[peer.id]?.avatar)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(peer.name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                    Text(runtime.displayName(peer)).font(.system(size: 17, weight: .semibold)).lineLimit(1)
                     Spacer(minLength: 0)
                     if let last { Text(last.date, style: .time).font(.system(size: 12)).foregroundStyle(.secondary) }
                 }
@@ -164,6 +148,7 @@ struct SpotchatAvatar: View {
     let name: String
     let size: CGFloat
     var nearby = false
+    var imageData: Data?
     private var color: Color {
         let palette: [Color] = [.blue, .indigo, .teal, .purple, .orange]
         let index = name.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % palette.count }
@@ -175,6 +160,11 @@ struct SpotchatAvatar: View {
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(LinearGradient(colors: [color.opacity(0.6), color], startPoint: .top, endPoint: .bottom), in: Circle())
+            .overlay {
+                if let data = imageData, let image = UIImage(data: data) {
+                    Image(uiImage: image).resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
+                }
+            }
             .overlay(alignment: .bottomTrailing) {
                 if nearby {
                     Circle().fill(.green).frame(width: 12, height: 12)
@@ -188,10 +178,11 @@ struct SpotchatConversationView: View {
     @ObservedObject var runtime: SpotchatRuntime
     let peer: SpotchatPeer
     @State private var draft = ""
+    @State private var showPeerProfile = false
     @FocusState private var inputFocused: Bool
     @State private var atBottom = true
     private var messages: [SpotchatMessage] { runtime.conversation(peer.id) }
-    private var name: String { runtime.peers.first(where: { $0.id == peer.id })?.name ?? peer.name }
+    private var name: String { runtime.displayName(peer) }
 
     var body: some View {
         let conversation = messages
@@ -201,7 +192,7 @@ struct SpotchatConversationView: View {
                     LazyVStack(spacing: 0) {
                         if conversation.isEmpty {
                             VStack(spacing: 12) {
-                                SpotchatAvatar(name: name, size: 70)
+                                SpotchatAvatar(name: name, size: 70, imageData: runtime.profiles.remote[peer.id]?.avatar)
                                 Text("Скажите привет").font(.headline)
                                 Text("\(name) рядом.\nДля разговора достаточно Bluetooth.")
                                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -262,9 +253,18 @@ struct SpotchatConversationView: View {
                     }
                 }.accessibilityElement(children: .combine)
             }
-            SpotchatAvatarToolbar { SpotchatAvatar(name: name, size: 34) }
+            SpotchatAvatarToolbar {
+                Button { showPeerProfile = true } label: {
+                    SpotchatAvatar(name: name, size: 34, imageData: runtime.profiles.remote[peer.id]?.avatar)
+                        .frame(width: 44, height: 44).contentShape(Circle())
+                }.buttonStyle(.plain).accessibilityLabel("Профиль собеседника")
+            }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        .sheet(isPresented: $showPeerProfile) {
+            SpotchatPeerProfileSheet(runtime: runtime, peer: peer) { showPeerProfile = false }
+        }
+        .onChange(of: showPeerProfile) { visible in runtime.openConversation(visible ? nil : peer.id) }
     }
 
     private var composer: some View {

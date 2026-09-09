@@ -30,6 +30,8 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     @Published private(set) var nickname: String
     @Published private(set) var bluetoothState: CBManagerState = .unknown
     @Published var error: String?
+    let profiles: SpotchatProfiles
+    private var profileChanges: AnyCancellable?
     private(set) var activePeer: PeerID?
     private var appActive = true
     private let transport: Transport
@@ -52,7 +54,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         let ble = BLEService(keychain: keychain,
                              idBridge: NostrIdentityBridge(keychain: keychain),
                              identityManager: SecureIdentityStateManager(keychain))
-        return SpotchatRuntime(transport: ble)
+        return SpotchatRuntime(transport: ble, profileStore: .live())
     }
 
     #if DEBUG && targetEnvironment(simulator)
@@ -60,6 +62,8 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         let wire = SpotchatPreviewTransport()
         let model = SpotchatRuntime(transport: wire, defaults: UserDefaults(suiteName: "Spotchat.UI.Preview")!)
         model.nickname = "Руслан"
+        try? model.profiles.save(SpotchatProfile(name: "Руслан", bio: "Люблю знакомиться и создавать новое", avatar: SpotchatAvatarCodec.diagnosticPhoto(seed: 12)))
+        model.profiles.seedPreview(SpotchatProfile(name: "Аня", bio: "Кофе, прогулки и хорошие разговоры", avatar: SpotchatAvatarCodec.diagnosticPhoto(seed: 64)), for: wire.samples[0].peerID)
         model.didReceiveTransportEvent(.bluetoothStateUpdated(.poweredOn))
         model.didUpdatePeerSnapshots(wire.samples)
         let peer = wire.samples[0].peerID
@@ -89,21 +93,38 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     #endif
 
     init(transport: Transport, defaults: UserDefaults = .standard,
+         profileStore: SpotchatProfileStore = SpotchatProfileStore(),
          now: @escaping () -> Date = Date.init) {
         self.transport = transport
         self.defaults = defaults
         self.now = now
-        self.nickname = defaults.string(forKey: "spotchat.nickname")
+        var initialName = defaults.string(forKey: "spotchat.nickname")
             .flatMap(InputValidator.validateNickname) ?? "Гость \(transport.myPeerID.id.prefix(4))"
         #if DEBUG
         if let testName = defaults.string(forKey: "SpotchatSelfTestName"),
            let run = defaults.string(forKey: "SpotchatSelfTestRun") {
-            self.nickname = "SC-\(run) \(testName)"
+            initialName = "SC-\(run) \(testName)"
         }
         #endif
+        var activeStore = profileStore
+        #if DEBUG
+        if defaults.string(forKey: "SpotchatSelfTestRun") != nil { activeStore = SpotchatProfileStore() }
+        #endif
+        let profileModel = SpotchatProfiles(name: initialName, store: activeStore, now: now,
+            connected: { transport.isPeerConnected($0) },
+            send: { data, peer in (transport as? SpotchatProfileTransporting)?.sendSpotchatProfile(data, to: peer) })
+        profiles = profileModel
+        nickname = profileModel.own.name
         transport.eventDelegate = self
         transport.peerEventsDelegate = self
         transport.setNickname(nickname)
+        profileChanges = profiles.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        #if DEBUG && os(iOS)
+        if let run = defaults.string(forKey: "SpotchatSelfTestRun") {
+            let seed = nickname.utf8.reduce(0) { ($0 + Int($1)) % 255 }
+            try? profiles.save(SpotchatProfile(name: nickname, bio: "Проверка профиля \(run)", avatar: SpotchatAvatarCodec.diagnosticPhoto(seed: seed)))
+        }
+        #endif
     }
 
     func start(runTimer: Bool = true) {
@@ -131,11 +152,24 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
             error = "Введите короткое имя без служебных символов."
             return false
         }
+        return saveProfile(name: valid, bio: profiles.own.bio, avatar: profiles.own.avatar)
+    }
+
+    func saveProfile(name: String, bio: String, avatar: Data?) -> Bool {
+        guard let valid = InputValidator.validateNickname(name), valid.utf8.count <= 64 else {
+            error = "Введите короткое имя без служебных символов."; return false
+        }
+        let profile = SpotchatProfile(name: valid, bio: bio.trimmingCharacters(in: .whitespacesAndNewlines), avatar: avatar)
+        guard profile.valid else { error = "Описание — до 160 символов. Попробуйте выбрать фото ещё раз."; return false }
+        do { try profiles.save(profile) }
+        catch { self.error = "Не удалось сохранить профиль. Попробуйте ещё раз."; return false }
         nickname = valid
         defaults.set(valid, forKey: "spotchat.nickname")
         transport.setNickname(valid)
         return true
     }
+
+    func displayName(_ peer: SpotchatPeer) -> String { profiles.remote[peer.id]?.name ?? peers.first(where: { $0.id == peer.id })?.name ?? peer.name }
 
     func openConversation(_ peer: PeerID?) {
         activePeer = peer
@@ -198,6 +232,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
 
     func tick() {
         didUpdatePeerSnapshots(transport.currentPeerSnapshots())
+        if transport is SpotchatProfileTransporting, bluetoothState == .poweredOn { profiles.tick() }
         // Each retry uses the same ID. Recipient deduplication makes a lost
         // acknowledgement safe; no receipt means no success indicator.
         let pending = messages.filter { message in
@@ -223,6 +258,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         let current = now()
         let connected = snapshots.filter { $0.peerID != transport.myPeerID && $0.isConnected }
         let ids = Set(connected.map(\.peerID))
+        profiles.updatePeers(ids)
         for peer in connected.prefix(100) {
             knownPeers[peer.peerID] = SpotchatPeer(id: peer.peerID, name: peer.nickname, lastConnected: current)
         }
@@ -234,12 +270,14 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         switch event {
         case .bluetoothStateUpdated(let state):
             bluetoothState = state
-            if state != .poweredOn { knownPeers.removeAll(); peers = [] }
+            if state != .poweredOn { knownPeers.removeAll(); peers = []; profiles.updatePeers([]) }
         case .peerSnapshotsUpdated(let snapshots): didUpdatePeerSnapshots(snapshots)
         case .peerConnected, .peerDisconnected, .peerListUpdated:
             didUpdatePeerSnapshots(transport.currentPeerSnapshots())
         case .noisePayloadReceived(let peer, let type, let data, let date):
             switch type {
+            case .spotchatProfile:
+                profiles.receive(data, from: peer)
             case .privateMessage:
                 guard let packet = PrivateMessagePacket.decode(from: data),
                       !packet.messageID.isEmpty, packet.messageID.utf8.count <= 255,
@@ -326,10 +364,17 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
             guard $0.outgoing else { return false }
             switch $0.status { case .delivered, .read: return true; default: return false }
         }
+        let receivedProfiles = profiles.remote.values.filter { $0.name.hasPrefix("SC-\(run) ") && $0.bio == "Проверка профиля \(run)" }
+        let receivedPhotos = receivedProfiles.compactMap(\.avatar)
         let result: [String: Any] = [
             "run": run, "name": nickname, "transport": "BLEService",
             "bluetoothPoweredOn": bluetoothState == .poweredOn,
             "nearbyCount": peers.count,
+            "profileReceivedCount": receivedProfiles.count,
+            "avatarReceivedCount": receivedPhotos.count,
+            "ownAvatarHash": profiles.own.avatar.map(SpotchatProfile.digest) ?? "",
+            "receivedAvatarHashes": receivedPhotos.map(SpotchatProfile.digest),
+            "receivedAvatarBytes": receivedPhotos.map(\.count),
             "sentCount": synthetic.filter(\.outgoing).count,
             "receivedCount": synthetic.filter { !$0.outgoing }.count,
             "confirmedCount": confirmed.count,

@@ -1,0 +1,20 @@
+{
+  "avatarReceivedCount" : 1,
+  "bluetoothPoweredOn" : true,
+  "confirmedCount" : 1,
+  "name" : "SC-S40910A iPhone14Pro",
+  "nearbyCount" : 1,
+  "ownAvatarHash" : "df35a3e546059c526eeafa8ac3b0d7a6829c84ed62d18e078ba7b3cbd6bd0f28",
+  "profileReceivedCount" : 1,
+  "receivedAvatarBytes" : [
+    31268
+  ],
+  "receivedAvatarHashes" : [
+    "fd98374da0e272da59985ab9fa6a02e612762712ca060f84b9cbbc0195c5972e"
+  ],
+  "receivedCount" : 1,
+  "run" : "S40910A",
+  "sentCount" : 1,
+  "transport" : "BLEService",
+  "updatedAt" : "2026-09-09T23:22:23Z"
+}
