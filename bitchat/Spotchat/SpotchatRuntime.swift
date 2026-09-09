@@ -88,6 +88,11 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
                 date: Date().addingTimeInterval(-600), outgoing: false, status: .delivered(to: "Руслан", at: Date())))
             if index == 1 { model.unreadMessageIDs.insert("\(sample.peerID.id):\(id)") }
         }
+        if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewEmptyChat") { model.messages = [] }
+        if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewLongBio") {
+            let bio = String(String(repeating: "Люблю прогулки, новые знакомства и разговоры о том, что вдохновляет. ", count: 3).prefix(160))
+            model.profiles.seedPreview(SpotchatProfile(name: "Аня", bio: bio, avatar: SpotchatAvatarCodec.diagnosticPhoto(seed: 64)), for: peer)
+        }
         return model
     }
     #endif

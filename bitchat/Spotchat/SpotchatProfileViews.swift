@@ -90,39 +90,35 @@ struct SpotchatOwnProfileSheet: View {
 struct SpotchatPeerProfileSheet: View {
     @ObservedObject var runtime: SpotchatRuntime
     let peer: SpotchatPeer
-    var writeMessage: () -> Void
     @State private var showPhoto = false
     private var profile: SpotchatProfile? { runtime.profiles.remote[peer.id] }
     var body: some View {
         ScrollView {
         VStack(spacing: 16) {
             Button { showPhoto = profile?.avatar != nil } label: {
-                SpotchatAvatar(name: runtime.displayName(peer), size: 96, imageData: profile?.avatar)
+                SpotchatAvatar(name: runtime.displayName(peer), size: 144, imageData: profile?.avatar)
             }.buttonStyle(.plain).accessibilityLabel("Посмотреть фото собеседника")
             VStack(spacing: 5) {
-                Text(runtime.displayName(peer)).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
+                Text(runtime.displayName(peer)).font(.system(size: 28, weight: .semibold)).multilineTextAlignment(.center)
                 HStack(spacing: 5) {
                     Circle().fill(runtime.isNearby(peer.id) ? Color.green : Color.secondary).frame(width: 6, height: 6)
                     Text(runtime.isNearby(peer.id) ? "Рядом" : "Сейчас не рядом").font(.subheadline).foregroundStyle(.secondary)
                 }
-            }
-            if let bio = profile?.bio, !bio.isEmpty {
-                Text(bio).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             if runtime.profiles.loading.contains(peer.id) {
                 HStack(spacing: 6) { ProgressView(); Text("Загружаем фото…").font(.caption).foregroundStyle(.secondary) }
             } else if runtime.profiles.failed.contains(peer.id), runtime.isNearby(peer.id) {
                 Button("Обновить профиль") { runtime.profiles.refresh(peer.id) }.font(.caption)
             }
-            Button(action: writeMessage) {
-                Label("Написать сообщение", systemImage: "bubble.left")
-                    .font(.body.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 14)
-                    .foregroundStyle(.white).background(Color.blue, in: RoundedRectangle(cornerRadius: 15))
-            }.buttonStyle(.plain)
-            Spacer(minLength: 0)
+            if let bio = profile?.bio, !bio.isEmpty {
+                Text(bio).font(.body).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+            }
         }
-        .padding(.horizontal, 28).padding(.top, 28).padding(.bottom, 12)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 28).padding(.top, 28).padding(.bottom, 28)
         }
         .background(Color(.systemBackground))
         .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)

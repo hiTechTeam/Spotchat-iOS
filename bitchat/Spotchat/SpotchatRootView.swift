@@ -63,10 +63,7 @@ struct SpotchatRootView: View {
             }
             .sheet(isPresented: $showProfile) { SpotchatOwnProfileSheet(runtime: runtime) }
             .sheet(item: $selectedPeer) { peer in
-                SpotchatPeerProfileSheet(runtime: runtime, peer: peer) {
-                    selectedPeer = nil
-                    path.append(peer)
-                }
+                SpotchatPeerProfileSheet(runtime: runtime, peer: peer)
             }
             .alert("Spotchat", isPresented: Binding(get: { runtime.error != nil }, set: { if !$0 { runtime.error = nil } })) {
                 Button("Понятно") { runtime.error = nil }
@@ -196,7 +193,10 @@ struct SpotchatConversationView: View {
                                 Text("Скажите привет").font(.headline)
                                 Text("\(name) рядом.\nДля разговора достаточно Bluetooth.")
                                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                            }.frame(maxWidth: .infinity).padding(.vertical, 50)
+                            }
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                            .frame(maxWidth: .infinity, minHeight: max(0, geometry.size.height - 10))
                         }
                         ForEach(Array(conversation.enumerated()), id: \.element.id) { index, message in
                             let previous = index > 0 ? conversation[index - 1] : nil
@@ -223,6 +223,9 @@ struct SpotchatConversationView: View {
                                 value: content.frame(in: .named("conversation")).maxY)
                         })
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded { inputFocused = false })
                 .coordinateSpace(name: "conversation")
                 .scrollDismissesKeyboard(.interactively)
                 .onPreferenceChange(SpotchatBottomKey.self) { atBottom = $0 <= geometry.size.height + 80 }
@@ -254,7 +257,7 @@ struct SpotchatConversationView: View {
                 }.accessibilityElement(children: .combine)
             }
             SpotchatAvatarToolbar {
-                Button { showPeerProfile = true } label: {
+                Button { inputFocused = false; showPeerProfile = true } label: {
                     SpotchatAvatar(name: name, size: 34, imageData: runtime.profiles.remote[peer.id]?.avatar)
                         .frame(width: 44, height: 44).contentShape(Circle())
                 }.buttonStyle(.plain).accessibilityLabel("Профиль собеседника")
@@ -262,7 +265,7 @@ struct SpotchatConversationView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .sheet(isPresented: $showPeerProfile) {
-            SpotchatPeerProfileSheet(runtime: runtime, peer: peer) { showPeerProfile = false }
+            SpotchatPeerProfileSheet(runtime: runtime, peer: peer)
         }
         .onChange(of: showPeerProfile) { visible in runtime.openConversation(visible ? nil : peer.id) }
     }
@@ -273,12 +276,10 @@ struct SpotchatConversationView: View {
                 Label("Собеседник отошёл. Подождём его рядом", systemImage: "antenna.radiowaves.left.and.right.slash")
                     .font(.caption).foregroundStyle(.secondary).padding(.top, 6)
             }
-            HStack(alignment: .bottom, spacing: 6) {
+            HStack(alignment: .center, spacing: 6) {
                 TextField("Сообщение", text: $draft, axis: .vertical)
                     .font(.body).lineLimit(1...5).focused($inputFocused)
-                    .padding(.horizontal, 15).padding(.vertical, 10)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22))
-                    .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color(.separator).opacity(0.18), lineWidth: 0.5))
+                    .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("spotchat.messageInput")
                     #if DEBUG && targetEnvironment(simulator)
                     .task {
