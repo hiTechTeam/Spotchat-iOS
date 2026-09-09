@@ -276,10 +276,12 @@ struct SpotchatConversationView: View {
                 Label("Собеседник отошёл. Подождём его рядом", systemImage: "antenna.radiowaves.left.and.right.slash")
                     .font(.caption).foregroundStyle(.secondary).padding(.top, 6)
             }
-            HStack(alignment: .center, spacing: 6) {
-                TextField("Сообщение", text: $draft, axis: .vertical)
+            HStack(alignment: .bottom, spacing: 8) {
+                HStack(alignment: .bottom, spacing: 0) {
+                TextField("Сообщение", text: $draft, prompt: Text("Сообщение").foregroundColor(Color(.secondaryLabel)), axis: .vertical)
                     .font(.body).lineLimit(1...5).focused($inputFocused)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .padding(.leading, 16).padding(.vertical, 12)
                     .accessibilityIdentifier("spotchat.messageInput")
                     #if DEBUG && targetEnvironment(simulator)
                     .task {
@@ -289,21 +291,38 @@ struct SpotchatConversationView: View {
                         }
                     }
                     #endif
+                    Menu {
+                        ForEach(["🙂", "😊", "👋", "❤️", "👍", "😂", "☕️", "✨"], id: \.self) { emoji in
+                            Button(emoji) { draft += emoji; inputFocused = true }
+                        }
+                    } label: {
+                        Image(systemName: "face.smiling")
+                            .font(.system(size: 22, weight: .regular))
+                            .foregroundStyle(Color(.secondaryLabel))
+                            .frame(width: 44, height: 46)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .tint(Color(.secondaryLabel))
+                    .accessibilityLabel("Добавить эмодзи")
+                }
+                .frame(minHeight: 46)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 23))
                 Button {
+                    guard canSend else { return }
                     if runtime.send(draft, to: peer.id) { draft = "" }
                 } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 19, weight: .semibold))
-                        .foregroundStyle(.white).frame(width: 35, height: 35)
-                        .background(canSend ? Color.blue : Color(.systemGray3), in: Circle())
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain).disabled(!canSend)
+                    Image(systemName: "paperplane.fill").font(.system(size: 21))
+                        .rotationEffect(.degrees(45))
+                        .foregroundStyle(.white).frame(width: 46, height: 46)
+                        .background(Color(uiColor: .systemBlue), in: Circle())
+                        .contentShape(Circle())
+                }.buttonStyle(.plain).disabled(!runtime.isNearby(peer.id))
                     .accessibilityLabel("Отправить сообщение").accessibilityIdentifier("spotchat.sendMessage")
             }
         }
-        .padding(.leading, 12).padding(.trailing, 7).padding(.vertical, 6)
-        .background(.bar)
-        .overlay(alignment: .top) { Color(.separator).opacity(0.2).frame(height: 0.5) }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Color(.systemBackground))
     }
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && runtime.isNearby(peer.id) }
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
