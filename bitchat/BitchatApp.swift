@@ -14,6 +14,11 @@ struct BitchatApp: App {
     static let bundleID = Bundle.main.bundleIdentifier ?? "chat.bitchat"
     static let groupID = "group.\(bundleID)"
 
+    #if os(iOS)
+    @StateObject private var spotchat = SpotchatRuntime.live()
+    @Environment(\.scenePhase) private var spotchatScenePhase
+    #endif
+    #if os(macOS)
     @StateObject private var runtime: AppRuntime
     @AppStorage(AppTheme.storageKey) private var appThemeRawValue = AppTheme.matrix.rawValue
     #if os(iOS)
@@ -28,7 +33,18 @@ struct BitchatApp: App {
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
     }
 
+    #endif
+
     var body: some Scene {
+        #if os(iOS)
+        WindowGroup {
+            SpotchatRootView(runtime: spotchat)
+                .task { spotchat.start() }
+                .onChange(of: spotchatScenePhase) { phase in
+                    spotchat.setAppActive(phase == .active)
+                }
+        }
+        #else
         WindowGroup {
             ContentView()
                 .environment(\.appTheme, AppTheme(rawValue: appThemeRawValue) ?? .matrix)
@@ -65,6 +81,7 @@ struct BitchatApp: App {
         #if os(macOS)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        #endif
         #endif
     }
 }

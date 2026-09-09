@@ -1,0 +1,11 @@
+{
+  "bluetoothPoweredOn" : true,
+  "confirmedCount" : 1,
+  "name" : "SC-S2C0910 iPhone11",
+  "nearbyCount" : 1,
+  "receivedCount" : 1,
+  "run" : "S2C0910",
+  "sentCount" : 1,
+  "transport" : "BLEService",
+  "updatedAt" : "2026-09-09T21:55:03Z"
+}

@@ -183,15 +183,12 @@ final class BLEService: NSObject {
     
     // MARK: - Constants
     
-    #if DEBUG
-    static let serviceUUID = CBUUID(string: "F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5A") // testnet
-    #else
-    static let serviceUUID = CBUUID(string: "F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C") // mainnet
-    #endif
-    static let characteristicUUID = CBUUID(string: "A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D")
-    private static let centralRestorationID = "chat.bitchat.ble.central"
-    private static let peripheralRestorationID = "chat.bitchat.ble.peripheral"
-    
+    // Spotchat's own discovery namespace, identical in Debug and Release.
+    static let serviceUUID = CBUUID(string: "14D26780-9D8B-4C16-8D42-A4F5B127C902")
+    static let characteristicUUID = CBUUID(string: "AF27DC35-9357-4D33-9273-18C1277C743B")
+    private static let centralRestorationID = "com.hitechteam.spotchat.ble.central"
+    private static let peripheralRestorationID = "com.hitechteam.spotchat.ble.peripheral"
+
     // Default per-fragment chunk size when link limits are unknown
     private let defaultFragmentSize = TransportConfig.bleDefaultFragmentSize
     private let bleMaxMTU = 512
