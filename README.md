@@ -1,168 +1,72 @@
-<img width="256" height="256" alt="icon_128x128@2x" src="https://github.com/user-attachments/assets/90133f83-b4f6-41c6-aab9-25d0859d2a47" />
+# Spotchat iOS
 
-## bitchat
+Локальный чат с людьми рядом без интернета. Этап 1: техническая основа на
+исходниках Bitchat, отдельный репозиторий и проверка сборки.
 
-A decentralized peer-to-peer messaging app with dual transport architecture: local Bluetooth mesh networks for offline communication and internet-based Nostr protocol for global reach. No accounts, no phone numbers, no central servers. It's the side-groupchat.
+**Текущая сборка сохраняет интерфейс и функции Bitchat.** Минимальный UI
+Spotchat, отключение интернет-транспортов и тест переписки на двух iPhone —
+следующие этапы. Новое имя приложения само по себе не меняет его поведение.
 
-[bitchat.free](http://bitchat.free)
+## Открыть и собрать
 
-📲 [App Store](https://apps.apple.com/us/app/bitchat-mesh/id6748219622)
+Требуется Xcode. Проект использует iOS 16.0 как минимальную версию.
+Первое разрешение Swift-пакетов требует интернета; это требование сборки,
+а не будущего Bluetooth-чата.
 
-📲 [Play Store](https://play.google.com/store/apps/details?id=com.bitchat.droid)
-
-### Getting a copy you can trust
-
-Install from the App Store, or build from source you have verified. A compiled build from anywhere else cannot be verified — see [Verifying bitchat](docs/VERIFYING-A-BUILD.md) for how to check source against the per-release hash manifest, and for what to do if that is the only build you can get.
-
-This matters more than it usually would: this repository has been the target of takedown demands, and when a repository or releases page disappears, mirrors appear that nobody can check.
-
-## License
-
-This project is released into the public domain. See the [LICENSE](LICENSE) file for details.
-
-## Features
-
-- **Dual Transport Architecture**: Bluetooth mesh for offline + Nostr protocol for internet-based messaging
-- **Location-Based Channels**: Geographic chat rooms using geohash coordinates over global Nostr relays
-- **Intelligent Message Routing**: Automatically chooses best transport (Bluetooth → Nostr fallback)
-- **Decentralized Mesh Network**: Automatic peer discovery and multi-hop message relay over Bluetooth LE
-- **Privacy First**: No accounts, no phone numbers, no servers. Note that the mesh does use a persistent per-device identifier derived from your identity key — see [the whitepaper](WHITEPAPER.md) on identity and metadata for what a nearby radio can observe
-- **Private Message End-to-End Encryption**: [Noise Protocol](https://noiseprotocol.org) for mesh, BitChat private envelopes for Nostr fallback
-- **IRC-Style Commands**: Familiar `/slap`, `/msg`, `/who` style interface
-- **Universal App**: Native support for iOS and macOS
-- **Emergency Wipe**: Triple-tap to instantly clear all data
-- **Performance Optimizations**: LZ4 message compression, adaptive battery modes, and optimized networking
-
-## [Technical Architecture](https://deepwiki.com/permissionlesstech/bitchat)
-
-BitChat uses a **hybrid messaging architecture** with two complementary transport layers:
-
-### Bluetooth Mesh Network (Offline)
-
-- **Local Communication**: Direct peer-to-peer within Bluetooth range
-- **Multi-hop Relay**: Messages route through nearby devices (max 7 hops)
-- **No Internet Required**: Works completely offline in disaster scenarios
-- **Noise Protocol Encryption**: End-to-end encryption, with forward secrecy for live sessions (store-and-forward mail is sealed without it — see the whitepaper)
-- **Binary Protocol**: Compact packet format optimized for Bluetooth LE constraints
-- **Automatic Discovery**: Peer discovery and connection management
-- **Adaptive Power**: Battery-optimized duty cycling
-
-### Nostr Protocol (Internet)
-
-- **Global Reach**: Connect with users worldwide via internet relays
-- **Location Channels**: Geographic chat rooms using geohash coordinates
-- **440+ Relay Network**: Distributed across the globe for reliability
-- **BitChat Private Envelopes**: App-specific encrypted private messages over Nostr relays
-- **Ephemeral Keys**: Fresh cryptographic identity per geohash area
-
-BitChat's private-envelope format is proprietary and is **not** NIP-17,
-NIP-44, or NIP-59 compatible. It uses Nostr as a relay transport but only
-interoperates with BitChat clients: private payloads travel inside kind-1059
-events whose `v2:`-prefixed content is a BitChat-specific XChaCha20-Poly1305
-construction, not NIP-44 encryption.
-
-### Channel Types
-
-#### `mesh #bluetooth`
-
-- **Transport**: Bluetooth Low Energy mesh network
-- **Scope**: Local devices within multi-hop range
-- **Internet**: Not required
-- **Use Case**: Offline communication, protests, disasters, remote areas
-
-#### Location Channels (`block #dr5rsj7`, `neighborhood #dr5rs`, `country #dr`)
-
-- **Transport**: Nostr protocol over internet
-- **Scope**: Geographic areas defined by geohash precision
-  - `block` (7 chars): City block level
-  - `neighborhood` (6 chars): District/neighborhood
-  - `city` (5 chars): City level
-  - `province` (4 chars): State/province
-  - `region` (2 chars): Country/large region
-- **Internet**: Required (connects to Nostr relays)
-- **Use Case**: Location-based community chat, local events, regional discussions
-
-### Direct Message Routing
-
-Private messages use **intelligent transport selection**:
-
-1. **Bluetooth First** (preferred when available)
-
-   - Direct connection with established Noise session
-   - Fastest and most private option
-
-2. **Nostr Fallback** (when Bluetooth unavailable)
-
-   - Uses recipient's Nostr public key
-   - BitChat's app-specific private-envelope encryption
-   - Routes through global relay network
-
-3. **Smart Queuing** (when neither available)
-   - Messages queued until transport becomes available
-   - Automatic delivery when connection established
-
-For detailed protocol documentation, see the [Technical Whitepaper](WHITEPAPER.md).
-
-## Setup
-
-### Option 1: Using Xcode
-
-```bash
+```sh
 open bitchat.xcodeproj
 ```
 
-For a signed device build, create your ignored local configuration and replace
-the example team ID with your Apple Developer Team ID:
+Выбрать схему **Spotchat** и iOS Simulator. Внутренние имена проекта, модулей
+и файлов `bitchat` сохранены для удобного сравнения с upstream.
 
-```bash
+Сборка из терминала без подписи:
+
+```sh
+xcodebuild -project bitchat.xcodeproj \
+  -scheme Spotchat -configuration Debug \
+  -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath .DerivedData \
+  CODE_SIGNING_ALLOWED=NO build
+```
+
+## Подготовка подписи для физических устройств
+
+```sh
 cp Configs/Local.xcconfig.example Configs/Local.xcconfig
 ```
 
-`Local.xcconfig.example` derives unique app and App Group identifiers from that
-team ID. The entitlement files already reference `$(APP_GROUP_ID)`, so tracked
-project or entitlement files do not need to be edited.
+Указать свой `DEVELOPMENT_TEAM` в локальном файле. Debug его автоматически
+подключает; файл исключён из Git. Release намеренно не использует локальные
+Debug-настройки. Команда исходного автора Bitchat удалена из общей конфигурации.
 
-Useful command-line checks from the repository root:
+Baseline включает share extension и App Groups. Для установки потребуются
+соответствующие provisioning profiles; Personal Team может не поддерживать
+эти возможности. Если тестируем через Personal Team, на этапе 2 нужно убрать
+share extension/App Groups из минимальной тестовой сборки, а не выбирать чужую
+команду. Установка и Bluetooth-обмен на двух iPhone на этапе 1 не проверялись.
 
-```bash
-# macOS Debug build without signing
-xcodebuild -project bitchat.xcodeproj -scheme "bitchat (macOS)" \
-  -configuration Debug CODE_SIGNING_ALLOWED=NO build
+## Структура и следующие этапы
 
-# Full SwiftPM test suite
-swift test
+- [Карта модулей и план подключения BLE](docs/spotchat/ARCHITECTURE.md)
+- [Происхождение кода и зависимости](docs/spotchat/UPSTREAM.md)
+- [Результаты проверки сборки](docs/spotchat/VALIDATION.md)
+- [Исходный README Bitchat](docs/spotchat/BITCHAT-README.md)
 
-# iOS simulator tests
-xcodebuild -project bitchat.xcodeproj -scheme "bitchat (iOS)" \
-  -sdk iphonesimulator \
-  -destination 'platform=iOS Simulator,name=iPhone 17' test
-```
+1. Основа проекта и сборка исходной версии.
+2. Текстовый обмен на двух физических iPhone без интернета.
+3. Список людей рядом и экран чата по согласованным макетам.
+4. Свой профиль, карточка собеседника и передача аватарок.
+5. Проверка переподключений, фоновых сценариев и статусов доставки.
 
-If `iPhone 17` is unavailable, choose an installed simulator from:
+## Upstream
 
-```bash
-xcodebuild -showdestinations -project bitchat.xcodeproj -scheme "bitchat (iOS)"
-```
+- `origin`: https://github.com/hiTechTeam/Spotchat-iOS
+- `upstream`: https://github.com/permissionlesstech/bitchat
+- Baseline: `9b84b361225facd8e623f25d76f889d3dc54a879`
 
-### Option 2: Using `just`
-
-```bash
-brew install just
-just check
-just run
-```
-
-`just build` and `just run` use the current `bitchat (macOS)` scheme and keep
-Xcode output in the ignored `.DerivedData/` directory. They never patch source,
-project, configuration, or entitlement files.
-
-`just clean` removes only `.DerivedData/` and `.build/`. It does not invoke Git
-or restore tracked files, so uncommitted work is preserved. `just test` runs the
-SwiftPM suite and `just test-ios` runs the iPhone 17 simulator suite.
-
-## Localization
-
-- App localizations live in `bitchat/Localizable.xcstrings`.
-- Share extension strings are separate in `bitchatShareExtension/Localization/Localizable.xcstrings`.
-- Prefer keys that describe intent (`app_info.features.offline.title`) and reuse existing ones where possible.
-- Run `xcodebuild -project bitchat.xcodeproj -scheme "bitchat (macOS)" -configuration Debug CODE_SIGNING_ALLOWED=NO build` to compile-check any localization updates.
+Код Bitchat сохранён с историей и исходной [лицензией Unlicense](LICENSE).
+Лицензии сторонних зависимостей действуют отдельно. Код Telescan и Telegram
+на этапе 1 не переносился. GitHub Actions исходного проекта сохранены как
+неактивные справочные файлы в `docs/spotchat/upstream-workflows`.
