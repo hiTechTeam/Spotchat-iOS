@@ -36,12 +36,12 @@ struct SpotchatOwnProfileSheet: View {
                         Divider().padding(.leading, 14)
                         TextField("Немного о себе", text: $bio, axis: .vertical)
                             .lineLimit(2...3).padding(14).accessibilityLabel("Описание профиля")
-                            .onChange(of: bio) { value in if value.count > 160 { bio = String(value.prefix(160)) } }
+                            .onChange(of: bio) { value in if value.count > SpotchatProfile.maxBioCharacters { bio = String(value.prefix(SpotchatProfile.maxBioCharacters)) } }
                     }.background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
                     HStack {
                         Text("Ваш профиль виден людям рядом.")
                         Spacer(minLength: 8)
-                        Text("\(bio.count)/160").monospacedDigit()
+                        Text("\(bio.count)/\(SpotchatProfile.maxBioCharacters)").monospacedDigit()
                     }.font(.caption).foregroundStyle(.secondary)
                     if avatar != nil {
                         Button("Удалить фото", role: .destructive) { avatar = nil; selection = nil }
@@ -93,11 +93,15 @@ struct SpotchatPeerProfileSheet: View {
     @State private var showPhoto = false
     private var profile: SpotchatProfile? { runtime.profiles.remote[peer.id] }
     var body: some View {
+        GeometryReader { geometry in
+        let avatarSize = min(280, max(180, (min(geometry.size.width - 56, geometry.size.height - 160) - 24) * 0.936))
         ScrollView {
         VStack(spacing: 16) {
             Button { showPhoto = profile?.avatar != nil } label: {
-                SpotchatAvatar(name: runtime.displayName(peer), size: 144, imageData: profile?.avatar)
-            }.buttonStyle(.plain).accessibilityLabel("Посмотреть фото собеседника")
+                SpotchatAvatar(name: runtime.displayName(peer), size: avatarSize, imageData: profile?.avatar)
+            }.buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .accessibilityLabel("Посмотреть фото собеседника")
             VStack(spacing: 5) {
                 Text(runtime.displayName(peer)).font(.system(size: 28, weight: .semibold)).multilineTextAlignment(.center)
                 HStack(spacing: 5) {
@@ -111,14 +115,15 @@ struct SpotchatPeerProfileSheet: View {
                 Button("Обновить профиль") { runtime.profiles.refresh(peer.id) }.font(.caption)
             }
             if let bio = profile?.bio, !bio.isEmpty {
-                Text(bio).font(.body).foregroundStyle(.secondary)
+                Text(String(bio.prefix(SpotchatProfile.maxBioCharacters))).font(.body).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 8)
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 28).padding(.top, 28).padding(.bottom, 28)
+        .frame(maxWidth: .infinity, minHeight: max(0, geometry.size.height - 48), alignment: .center)
+        .padding(.horizontal, 28).padding(.vertical, 24)
+        }
         }
         .background(Color(.systemBackground))
         .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)

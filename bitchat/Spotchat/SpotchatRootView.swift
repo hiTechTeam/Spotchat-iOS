@@ -281,7 +281,7 @@ struct SpotchatConversationView: View {
                 TextField("Сообщение", text: $draft, prompt: Text("Сообщение").foregroundColor(Color(.secondaryLabel)), axis: .vertical)
                     .font(.body).lineLimit(1...5).focused($inputFocused)
                     .textFieldStyle(.plain)
-                    .padding(.leading, 16).padding(.vertical, 12)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
                     .accessibilityIdentifier("spotchat.messageInput")
                     #if DEBUG && targetEnvironment(simulator)
                     .task {
@@ -291,20 +291,7 @@ struct SpotchatConversationView: View {
                         }
                     }
                     #endif
-                    Menu {
-                        ForEach(["🙂", "😊", "👋", "❤️", "👍", "😂", "☕️", "✨"], id: \.self) { emoji in
-                            Button(emoji) { draft += emoji; inputFocused = true }
-                        }
-                    } label: {
-                        Image(systemName: "face.smiling")
-                            .font(.system(size: 22, weight: .regular))
-                            .foregroundStyle(Color(.secondaryLabel))
-                            .frame(width: 44, height: 46)
-                            .contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton)
-                    .tint(Color(.secondaryLabel))
-                    .accessibilityLabel("Добавить эмодзи")
+
                 }
                 .frame(minHeight: 46)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 23))

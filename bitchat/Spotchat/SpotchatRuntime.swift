@@ -90,7 +90,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         }
         if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewEmptyChat") { model.messages = [] }
         if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewLongBio") {
-            let bio = String(String(repeating: "Люблю прогулки, новые знакомства и разговоры о том, что вдохновляет. ", count: 3).prefix(160))
+            let bio = String(String(repeating: "Люблю прогулки, новые знакомства и разговоры о том, что вдохновляет. ", count: 3).prefix(SpotchatProfile.maxBioCharacters))
             model.profiles.seedPreview(SpotchatProfile(name: "Аня", bio: bio, avatar: SpotchatAvatarCodec.diagnosticPhoto(seed: 64)), for: peer)
         }
         return model
@@ -165,7 +165,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
             error = "Введите короткое имя без служебных символов."; return false
         }
         let profile = SpotchatProfile(name: valid, bio: bio.trimmingCharacters(in: .whitespacesAndNewlines), avatar: avatar)
-        guard profile.valid else { error = "Описание — до 160 символов. Попробуйте выбрать фото ещё раз."; return false }
+        guard profile.valid else { error = "Описание — до \(SpotchatProfile.maxBioCharacters) символов. Попробуйте выбрать фото ещё раз."; return false }
         do { try profiles.save(profile) }
         catch { self.error = "Не удалось сохранить профиль. Попробуйте ещё раз."; return false }
         nickname = valid

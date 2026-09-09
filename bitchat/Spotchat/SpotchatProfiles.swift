@@ -13,6 +13,7 @@ struct SpotchatProfile: Codable, Equatable {
     var name: String
     var bio: String = ""
     var avatar: Data?
+    static let maxBioCharacters = 72
     static let maxAvatarBytes = 40 * 1024
 
     static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
@@ -27,7 +28,7 @@ struct SpotchatProfile: Codable, Equatable {
         return CGImageSourceCreateImageAtIndex(source, 0, nil) != nil
     }
     var valid: Bool {
-        InputValidator.validateNickname(name) == name && name.utf8.count <= 64 && bio.count <= 160 && bio.utf8.count <= 640 &&
+        InputValidator.validateNickname(name) == name && name.utf8.count <= 64 && bio.count <= Self.maxBioCharacters && bio.utf8.count <= 640 &&
         !bio.unicodeScalars.contains { CharacterSet.controlCharacters.subtracting(.newlines).contains($0) } &&
         (avatar.map(Self.validAvatar) ?? true)
     }
@@ -74,7 +75,9 @@ final class SpotchatProfileStore {
     }
     func loadOwn() -> SpotchatProfile? {
         guard let directory, let data = try? Data(contentsOf: directory.appendingPathComponent("own.json")),
-              data.count <= 60 * 1024, let profile = try? JSONDecoder().decode(SpotchatProfile.self, from: data), profile.valid else { return nil }
+              data.count <= 60 * 1024, var profile = try? JSONDecoder().decode(SpotchatProfile.self, from: data) else { return nil }
+        profile.bio = String(profile.bio.prefix(SpotchatProfile.maxBioCharacters))
+        guard profile.valid else { return nil }
         return profile
     }
     func saveOwn(_ profile: SpotchatProfile) throws {

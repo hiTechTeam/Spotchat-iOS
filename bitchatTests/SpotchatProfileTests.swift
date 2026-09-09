@@ -138,8 +138,15 @@ struct SpotchatProfileTests {
         store.cache(data, hash: hash)
         #expect(SpotchatProfileStore(directory: directory).avatar(hash) == data)
         #expect(store.avatar("../../own") == nil)
-        #expect(!SpotchatProfile(name: "Аня", bio: String(repeating: "x", count: 161)).valid)
+        #expect(!SpotchatProfile(name: "Аня", bio: String(repeating: "x", count: 73)).valid)
         #expect(!SpotchatProfile.validAvatar(Data(repeating: 0, count: 400)))
+        #expect(SpotchatProfile(name: "Аня", bio: String(repeating: "я", count: 72)).valid)
+        var legacy = profile
+        legacy.bio = String(repeating: "я", count: 160)
+        try store.saveOwn(legacy)
+        let migrated = try #require(store.loadOwn())
+        #expect(migrated.bio == String(repeating: "я", count: 72))
+        #expect(migrated.name == profile.name && migrated.avatar == profile.avatar)
     }
 }
 #endif
