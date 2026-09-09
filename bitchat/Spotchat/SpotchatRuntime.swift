@@ -26,6 +26,7 @@ struct SpotchatMessage: Identifiable {
 final class SpotchatRuntime: ObservableObject, TransportEventDelegate, TransportPeerEventsDelegate {
     @Published private(set) var peers: [SpotchatPeer] = []
     @Published private(set) var messages: [SpotchatMessage] = []
+    @Published private var unreadMessageIDs: Set<String> = []
     @Published private(set) var nickname: String
     @Published private(set) var bluetoothState: CBManagerState = .unknown
     @Published var error: String?
@@ -44,12 +45,48 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     static let maxAttempts = 3
 
     static func live() -> SpotchatRuntime {
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("-SpotchatPreview") { return preview() }
+        #endif
         let keychain = KeychainManager.makeDefault()
         let ble = BLEService(keychain: keychain,
                              idBridge: NostrIdentityBridge(keychain: keychain),
                              identityManager: SecureIdentityStateManager(keychain))
         return SpotchatRuntime(transport: ble)
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+    private static func preview() -> SpotchatRuntime {
+        let wire = SpotchatPreviewTransport()
+        let model = SpotchatRuntime(transport: wire, defaults: UserDefaults(suiteName: "Spotchat.UI.Preview")!)
+        model.nickname = "Руслан"
+        model.didReceiveTransportEvent(.bluetoothStateUpdated(.poweredOn))
+        model.didUpdatePeerSnapshots(wire.samples)
+        let peer = wire.samples[0].peerID
+        let lines: [(String, Bool)] = [
+            ("Привет! 👋", false), ("Привет", true),
+            ("Ты тоже пробуешь Spotchat?", false),
+            ("Да", true),
+            ("Прикольно, что можно просто написать человеку рядом. Даже без интернета", true),
+            ("Ага! Давай проверим 🙂", false),
+            ("Раз, два…\nВсё долетело?", false),
+            ("Всё работает ✨", true)
+        ]
+        model.messages = lines.enumerated().map { index, line in
+            SpotchatMessage(id: "preview-\(index)", peerID: peer, text: line.0,
+                date: Date().addingTimeInterval(Double(index - lines.count) * 30),
+                outgoing: line.1, status: .read(by: "Аня", at: Date()))
+        }
+        for (index, text) in ["Увидимся!", "Привет, я тоже здесь", "Отличная идея 👍"].enumerated() {
+            let sample = wire.samples[index + 1]
+            let id = "preview-peer-\(index)"
+            model.messages.append(SpotchatMessage(id: id, peerID: sample.peerID, text: text,
+                date: Date().addingTimeInterval(-600), outgoing: false, status: .delivered(to: "Руслан", at: Date())))
+            if index == 1 { model.unreadMessageIDs.insert("\(sample.peerID.id):\(id)") }
+        }
+        return model
+    }
+    #endif
 
     init(transport: Transport, defaults: UserDefaults = .standard,
          now: @escaping () -> Date = Date.init) {
@@ -108,6 +145,10 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
 
     func conversation(_ peer: PeerID) -> [SpotchatMessage] {
         messages.filter { $0.peerID == peer }
+    }
+
+    func unreadCount(for peer: PeerID) -> Int {
+        conversation(peer).filter { !$0.outgoing && unreadMessageIDs.contains("\(peer.id):\($0.id)") }.count
     }
 
     func isNearby(_ peer: PeerID) -> Bool {
@@ -205,6 +246,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
                       !packet.content.isEmpty else { return }
                 let dedupID = "\(peer.id):\(packet.messageID)"
                 if receivedIDs.insert(dedupID).inserted {
+                    if !appActive || activePeer != peer { unreadMessageIDs.insert(dedupID) }
                     receivedOrder.append(dedupID)
                     if receivedOrder.count > 4000 { receivedIDs.remove(receivedOrder.removeFirst()) }
                     messages.append(SpotchatMessage(id: packet.messageID, peerID: peer,
@@ -250,11 +292,19 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
 
     private func markVisibleRead() {
         guard appActive, let peer = activePeer else { return }
-        for message in conversation(peer) where !message.outgoing { sendRead(message.id, to: peer) }
+        for message in conversation(peer) where !message.outgoing {
+            unreadMessageIDs.remove("\(peer.id):\(message.id)")
+            sendRead(message.id, to: peer)
+        }
     }
 
     private func trimMessages() {
-        if messages.count > 1000 { messages.removeFirst(messages.count - 1000) }
+        if messages.count > 1000 {
+            for message in messages.prefix(messages.count - 1000) {
+                unreadMessageIDs.remove("\(message.peerID.id):\(message.id)")
+            }
+            messages.removeFirst(messages.count - 1000)
+        }
     }
 
     #if DEBUG
