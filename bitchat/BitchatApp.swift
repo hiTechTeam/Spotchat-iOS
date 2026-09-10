@@ -39,7 +39,10 @@ struct BitchatApp: App {
         #if os(iOS)
         WindowGroup {
             SpotchatRootView(runtime: spotchat)
-                .task { spotchat.start() }
+                .task {
+                    spotchat.setAppActive(spotchatScenePhase == .active)
+                    spotchat.start()
+                }
                 .onChange(of: spotchatScenePhase) { phase in
                     spotchat.setAppActive(phase == .active)
                 }

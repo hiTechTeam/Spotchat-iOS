@@ -117,7 +117,7 @@ final class SpotchatProfiles: ObservableObject {
         var bytes = Data()
         var lastSent = Date.distantPast
         var attempts = 0
-        let started: Date
+        var started: Date
     }
     private let store: SpotchatProfileStore
     private let send: (Data, PeerID) -> Void
@@ -128,6 +128,7 @@ final class SpotchatProfiles: ObservableObject {
     private var checked: [PeerID: Date] = [:]
     private var packetRate: [PeerID: (Date, Int)] = [:]
     private var hints: [PeerID: Date] = [:]
+    private var appActive = true
     static let retryInterval: TimeInterval = 8
 
     init(name: String, store: SpotchatProfileStore = SpotchatProfileStore(),
@@ -152,7 +153,19 @@ final class SpotchatProfiles: ObservableObject {
         checked[peer] = nil; pending[peer] = nil; failed.remove(peer)
         tick()
     }
+    func setAppActive(_ active: Bool) {
+        guard appActive != active else { return }
+        appActive = active
+        if active {
+            for peer in Array(pending.keys) {
+                pending[peer]?.started = now()
+                pending[peer]?.lastSent = .distantPast
+                pending[peer]?.attempts = 0
+            }
+        }
+    }
     func tick() {
+        guard appActive else { return }
         for peer in peers.sorted(by: { $0.id < $1.id }) where connected(peer) {
             if let item = pending[peer] {
                 if now().timeIntervalSince(item.started) > 180 || (item.attempts >= 4 && now().timeIntervalSince(item.lastSent) >= Self.retryInterval) {

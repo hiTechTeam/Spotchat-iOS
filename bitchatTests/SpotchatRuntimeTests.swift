@@ -123,4 +123,109 @@ struct SpotchatRuntimeTests {
         #expect(wire.sentPrivateMessages.isEmpty)
         #expect(model.send(String(repeating: "я", count: 127), to: bob))
     }
+    @Test("Disconnect waits without consuming attempts, reconnect keeps ID, wait is bounded")
+    func reconnection() throws {
+        var clock = Date(timeIntervalSince1970: 1000)
+        let wire = MockTransport(); wire.connectedPeers = [bob]
+        let model = make(wire, now: { clock })
+        #expect(model.send("Переподключение", to: bob))
+        let id = try #require(model.messages.first?.id)
+        wire.connectedPeers = []
+        clock.addTimeInterval(2); model.tick()
+        #expect(model.messages[0].waitingForConnection)
+        clock.addTimeInterval(45); model.tick()
+        #expect(wire.sentPrivateMessages.count == 1)
+        #expect(model.messages[0].status == .sending)
+        wire.connectedPeers = [bob]; model.tick()
+        #expect(wire.sentPrivateMessages.count == 2)
+        #expect(Set(wire.sentPrivateMessages.map(\.messageID)) == [id])
+        #expect(!model.messages[0].waitingForConnection)
+        wire.connectedPeers = []; model.tick()
+        clock.addTimeInterval(121); model.tick()
+        guard case .failed = model.messages[0].status else { Issue.record("Unbounded offline wait"); return }
+        wire.connectedPeers = [bob]
+        model.retry(model.messages[0])
+        #expect(wire.sentPrivateMessages.last?.messageID == id)
+        #expect(model.messages[0].disconnectedWait == 0)
+    }
+
+    @Test("Background time cannot exhaust delivery attempts or offline wait")
+    func suspension() throws {
+        var clock = Date(timeIntervalSince1970: 1000)
+        let wire = MockTransport(); wire.connectedPeers = [bob]
+        let model = make(wire, now: { clock })
+        #expect(model.send("Вернусь", to: bob))
+        model.setAppActive(false)
+        clock.addTimeInterval(3600); model.tick()
+        #expect(wire.sentPrivateMessages.count == 1)
+        model.setAppActive(true)
+        #expect(wire.sentPrivateMessages.count == 1)
+        #expect(model.messages[0].status == .sending)
+        clock.addTimeInterval(11); model.tick()
+        #expect(wire.sentPrivateMessages.count == 2)
+        wire.connectedPeers = []; model.tick()
+        model.setAppActive(false)
+        clock.addTimeInterval(3600); model.tick()
+        model.setAppActive(true)
+        #expect(model.messages[0].waitingForConnection)
+        #expect(model.messages[0].disconnectedWait == 0)
+        #expect(wire.stopServicesCallCount == 0)
+    }
+
+    @Test("Read receipt retries are bounded and never emitted while backgrounded")
+    func boundedReads() throws {
+        var clock = Date(timeIntervalSince1970: 1000)
+        let wire = MockTransport(); wire.connectedPeers = [bob]
+        let model = make(wire, now: { clock })
+        model.openConversation(bob)
+        try receive(model, from: bob, id: "read-retry", text: "Привет")
+        for _ in 0..<10 { model.openConversation(bob); model.tick() }
+        #expect(wire.sentReadReceipts.count == 1)
+        clock.addTimeInterval(11); model.tick()
+        #expect(wire.sentReadReceipts.count == 2)
+        model.setAppActive(false)
+        clock.addTimeInterval(120); model.tick()
+        #expect(wire.sentReadReceipts.count == 2)
+        try receive(model, from: bob, id: "in-background", text: "Фон")
+        #expect(model.unreadCount(for: bob) == 1)
+        model.setAppActive(true)
+        #expect(model.unreadCount(for: bob) == 0)
+        for _ in 0..<10 { clock.addTimeInterval(11); model.tick() }
+        #expect(wire.sentReadReceipts.count == 6)
+        #expect(model.messages.count == 2)
+    }
+
+    @Test("Bluetooth off rejects stale connected snapshots and pauses a failed local write")
+    func bluetoothOff() throws {
+        let wire = MockTransport(); wire.simulateConnect(bob, nickname: "Боб")
+        let model = make(wire)
+        #expect(model.send("Тест", to: bob))
+        let id = try #require(model.messages.first?.id)
+        model.didReceiveTransportEvent(.bluetoothStateUpdated(.poweredOff))
+        model.tick()
+        #expect(model.peers.isEmpty)
+        #expect(model.messages[0].waitingForConnection)
+        model.didReceiveTransportEvent(.messageDeliveryStatusUpdated(messageID: id, status: .failed(reason: "No route")))
+        #expect(model.messages[0].status == .sending)
+        model.didReceiveTransportEvent(.bluetoothStateUpdated(.poweredOn))
+        model.tick()
+        #expect(model.peers.count == 1)
+        #expect(wire.sentPrivateMessages.count == 2)
+    }
+
+    @Test("Repeated disconnects cannot replenish the delivery retry budget")
+    func flappingLink() throws {
+        var clock = Date(timeIntervalSince1970: 1000)
+        let wire = MockTransport(); wire.connectedPeers = [bob]
+        let model = make(wire, now: { clock })
+        #expect(model.send("Повтор", to: bob))
+        for _ in 0..<5 {
+            wire.connectedPeers = []; clock.addTimeInterval(2); model.tick()
+            wire.connectedPeers = [bob]; clock.addTimeInterval(2); model.tick()
+        }
+        #expect(wire.sentPrivateMessages.count == 3)
+        clock.addTimeInterval(11); model.tick()
+        guard case .failed = model.messages[0].status else { Issue.record("Unbounded reconnect retries"); return }
+    }
+
 }

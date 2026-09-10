@@ -148,5 +148,24 @@ struct SpotchatProfileTests {
         #expect(migrated.bio == String(repeating: "я", count: 72))
         #expect(migrated.name == profile.name && migrated.avatar == profile.avatar)
     }
+    @Test("Photo requests survive suspension without expiring or polling in background")
+    func suspendedPhoto() throws {
+        let wire = Network(); let a = wire.add(alice, name: "Аня"), b = wire.add(bob, name: "Борис")
+        try a.save(.init(name: "Аня", avatar: photo()))
+        b.updatePeers([alice]); b.tick()
+        var dropped = false
+        try wire.drain { packet in
+            if packet.kind == .chunk && !dropped { dropped = true; return true }; return false
+        }
+        let sent = wire.sent.count
+        b.setAppActive(false)
+        wire.clock.addTimeInterval(3600); b.tick(); try wire.drain()
+        #expect(wire.sent.count == sent)
+        #expect(b.failed.isEmpty)
+        b.setAppActive(true); b.tick(); try wire.drain()
+        #expect(b.remote[alice]?.avatar == a.own.avatar)
+        #expect(b.failed.isEmpty && b.loading.isEmpty)
+    }
+
 }
 #endif

@@ -1,0 +1,83 @@
+{
+  "activePeer": "b71a3aca8c833129",
+  "appActive": true,
+  "avatarReceivedCount": 1,
+  "bluetoothPoweredOn": true,
+  "confirmedCount": 1,
+  "events": [
+    {
+      "active": false,
+      "at": "2026-09-10T06:25:16Z",
+      "event": "background"
+    },
+    {
+      "active": true,
+      "at": "2026-09-10T06:25:16Z",
+      "event": "foreground"
+    },
+    {
+      "active": true,
+      "at": "2026-09-10T06:25:16Z",
+      "event": "peer-connected",
+      "id": "b71a3aca8c833129"
+    },
+    {
+      "active": true,
+      "at": "2026-09-10T06:25:17Z",
+      "event": "received",
+      "id": "CC74B216-9085-48A0-8E66-84AE97B8FEF5"
+    },
+    {
+      "active": true,
+      "at": "2026-09-10T06:25:17Z",
+      "event": "read-sent",
+      "id": "CC74B216-9085-48A0-8E66-84AE97B8FEF5"
+    },
+    {
+      "active": true,
+      "at": "2026-09-10T06:25:28Z",
+      "event": "read-sent",
+      "id": "CC74B216-9085-48A0-8E66-84AE97B8FEF5"
+    },
+    {
+      "active": true,
+      "at": "2026-09-10T06:25:40Z",
+      "event": "read-sent",
+      "id": "CC74B216-9085-48A0-8E66-84AE97B8FEF5"
+    }
+  ],
+  "messages": [
+    {
+      "attempts": 0,
+      "id": "CC74B216-9085-48A0-8E66-84AE97B8FEF5",
+      "outgoing": false,
+      "status": "delivered",
+      "text": "Spotchat BLE test S510A от SC-S510A iPhone11",
+      "unread": false
+    },
+    {
+      "attempts": 1,
+      "id": "7ACA3125-83C6-4E40-A8D8-BBAFE7C7EC8E",
+      "outgoing": true,
+      "status": "read",
+      "text": "Spotchat BLE test S510A от SC-S510A iPhone14Pro",
+      "unread": false
+    }
+  ],
+  "name": "SC-S510A iPhone14Pro",
+  "nearbyCount": 1,
+  "ownAvatarHash": "1e014e8369a9fd783f771e400388679b224eaed48b44979b188adf9214ce4002",
+  "profileReceivedCount": 1,
+  "receivedAvatarBytes": [
+    31281
+  ],
+  "receivedAvatarHashes": [
+    "35b440a21946e59824a29eaf2b7c46e75c9dcee1ab2e2677d397c2e9d3bf90bb"
+  ],
+  "receivedCount": 1,
+  "run": "S510A",
+  "sentCount": 1,
+  "session": "D42BD1C0-DB71-47F0-A36E-3ECFBC4E24C8",
+  "transport": "BLEService",
+  "updatedAt": "2026-09-10T06:26:12Z"
+}

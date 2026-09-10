@@ -18,6 +18,9 @@ struct SpotchatMessage: Identifiable {
     var status: DeliveryStatus
     var attempts: Int = 0
     var lastAttempt: Date = .distantPast
+    var waitingForConnection = false
+    var disconnectedWait: TimeInterval = 0
+    var lastProgress: Date = .distantPast
 }
 
 /// Minimal local-only composition. Never instantiates AppRuntime/ChatViewModel,
@@ -34,6 +37,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     private var profileChanges: AnyCancellable?
     private(set) var activePeer: PeerID?
     private var appActive = true
+    private var readAttempts: [String: (count: Int, sentAt: Date)] = [:]
     private let transport: Transport
     private let defaults: UserDefaults
     private let now: () -> Date
@@ -45,6 +49,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     static let disappearanceDelay: TimeInterval = 6
     static let retryInterval: TimeInterval = 10
     static let maxAttempts = 3
+    static let connectionWaitLimit: TimeInterval = 120
 
     static func live() -> SpotchatRuntime {
         #if DEBUG && targetEnvironment(simulator)
@@ -144,12 +149,24 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     func setAppActive(_ active: Bool) {
+        guard appActive != active else { return }
         appActive = active
+        profiles.setAppActive(active)
+        // Suspension is not a delivery failure. On return give the BLE/Noise
+        // session a fresh acknowledgement interval before retrying.
+        for index in messages.indices {
+            messages[index].lastProgress = now()
+            if active { messages[index].lastAttempt = now() }
+        }
         if active {
             transport.startServices()
             tick()
             markVisibleRead()
         }
+        #if DEBUG
+        recordSelfTestEvent(active ? "foreground" : "background")
+        writeSelfTestResult()
+        #endif
     }
 
     func saveNickname(_ name: String) -> Bool {
@@ -221,6 +238,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
               let index = messages.firstIndex(where: { $0.id == message.id && $0.outgoing }) else { return }
         guard case .failed = messages[index].status else { return }
         messages[index].attempts = 0
+        messages[index].disconnectedWait = 0
         messages[index].status = .sending
         transmit(id: message.id)
     }
@@ -229,6 +247,8 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         guard let index = messages.firstIndex(where: { $0.id == id && $0.outgoing }) else { return }
         messages[index].attempts += 1
         messages[index].lastAttempt = now()
+        messages[index].lastProgress = now()
+        messages[index].waitingForConnection = false
         let message = messages[index]
         transport.sendPrivateMessage(message.text, to: message.peerID,
                                      recipientNickname: knownPeers[message.peerID]?.name ?? "Гость",
@@ -237,32 +257,61 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
 
     func tick() {
         didUpdatePeerSnapshots(transport.currentPeerSnapshots())
-        if transport is SpotchatProfileTransporting, bluetoothState == .poweredOn { profiles.tick() }
-        // Each retry uses the same ID. Recipient deduplication makes a lost
-        // acknowledgement safe; no receipt means no success indicator.
-        let pending = messages.filter { message in
-            guard message.outgoing else { return false }
-            switch message.status {
-            case .sending, .sent: return now().timeIntervalSince(message.lastAttempt) >= Self.retryInterval
-            default: return false
-            }
-        }
-        for message in pending {
-            if message.attempts < Self.maxAttempts && isNearby(message.peerID) {
-                transmit(id: message.id)
-            } else if let index = messages.firstIndex(where: { $0.id == message.id && $0.outgoing }) {
-                messages[index].status = .failed(reason: "Нет подтверждения")
-            }
+        if appActive {
+            if transport is SpotchatProfileTransporting, bluetoothState == .poweredOn { profiles.tick() }
+            advancePendingMessages()
+            markVisibleRead()
         }
         #if DEBUG
         runSelfTestIfRequested()
         #endif
     }
 
+    private func advancePendingMessages() {
+        // Only foreground time counts. A disconnect pauses transport attempts,
+        // while a bounded wait prevents an endless "waiting for connection".
+        for index in messages.indices where messages[index].outgoing {
+            switch messages[index].status { case .sending, .sent: break; default: continue }
+            let elapsed = max(0, now().timeIntervalSince(messages[index].lastProgress))
+            messages[index].lastProgress = now()
+            if !isNearby(messages[index].peerID) {
+                messages[index].disconnectedWait += elapsed
+                messages[index].waitingForConnection = true
+                if messages[index].disconnectedWait >= Self.connectionWaitLimit {
+                    messages[index].waitingForConnection = false
+                    messages[index].status = .failed(reason: "Связь не восстановилась")
+                }
+                continue
+            }
+            if messages[index].waitingForConnection {
+                messages[index].waitingForConnection = false
+                if messages[index].attempts < Self.maxAttempts {
+                    transmit(id: messages[index].id)
+                } else {
+                    // A flapping link must not replenish an exhausted retry budget.
+                    messages[index].lastAttempt = now()
+                }
+            } else if now().timeIntervalSince(messages[index].lastAttempt) >= Self.retryInterval {
+                if messages[index].attempts < Self.maxAttempts {
+                    transmit(id: messages[index].id)
+                } else {
+                    messages[index].status = .failed(reason: "Нет подтверждения")
+                }
+            }
+        }
+    }
+
     func didUpdatePeerSnapshots(_ snapshots: [TransportPeerSnapshot]) {
         let current = now()
-        let connected = snapshots.filter { $0.peerID != transport.myPeerID && $0.isConnected }
+        let connected = snapshots.filter { bluetoothState == .poweredOn && $0.peerID != transport.myPeerID && $0.isConnected }
         let ids = Set(connected.map(\.peerID))
+        #if DEBUG
+        if defaults.string(forKey: "SpotchatSelfTestRun") != nil {
+            for peer in ids.subtracting(testConnectedPeers) { recordSelfTestEvent("peer-connected", messageID: peer.id) }
+            for peer in testConnectedPeers.subtracting(ids) { recordSelfTestEvent("peer-disconnected", messageID: peer.id) }
+            testConnectedPeers = ids
+        }
+        #endif
         profiles.updatePeers(ids)
         for peer in connected.prefix(100) {
             knownPeers[peer.peerID] = SpotchatPeer(id: peer.peerID, name: peer.nickname, lastConnected: current)
@@ -297,6 +346,9 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
                                                    outgoing: false, status: .delivered(to: nickname, at: now())))
                     trimMessages()
                 }
+                #if DEBUG
+                recordSelfTestEvent("received", messageID: packet.messageID)
+                #endif
                 transport.sendDeliveryAck(for: packet.messageID, to: peer)
                 if appActive && activePeer == peer { sendRead(packet.messageID, to: peer) }
             case .delivered, .readReceipt:
@@ -304,6 +356,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
                       let index = messages.firstIndex(where: { $0.id == id && $0.outgoing && $0.peerID == peer }) else { return }
                 if case .read = messages[index].status { return }
                 let name = knownPeers[peer]?.name ?? "Собеседник"
+                messages[index].waitingForConnection = false
                 messages[index].status = type == .readReceipt
                     ? .read(by: name, at: now()) : .delivered(to: name, at: now())
             default: break
@@ -316,7 +369,11 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
             case .sending, .sent:
                 switch status {
                 case .sent: messages[index].status = .sent
-                case .failed: messages[index].status = status
+                case .failed:
+                    if !isNearby(messages[index].peerID) {
+                        messages[index].waitingForConnection = true
+                        messages[index].lastProgress = now()
+                    } else { messages[index].status = status }
                 default: break
                 }
             default: break
@@ -328,16 +385,27 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         #endif
     }
 
-    private func sendRead(_ id: String, to peer: PeerID) {
+    @discardableResult
+    private func sendRead(_ id: String, to peer: PeerID) -> Bool {
+        guard appActive, activePeer == peer, isNearby(peer) else { return false }
+        let key = "\(peer.id):\(id)"
+        let progress = readAttempts[key] ?? (count: 0, sentAt: Date.distantPast)
+        guard progress.count < 3, now().timeIntervalSince(progress.sentAt) >= Self.retryInterval else { return false }
+        readAttempts[key] = (progress.count + 1, now())
         transport.sendReadReceipt(ReadReceipt(originalMessageID: id,
             readerID: transport.myPeerID, readerNickname: nickname), to: peer)
+        #if DEBUG
+        recordSelfTestEvent("read-sent", messageID: id)
+        #endif
+        return true
     }
 
     private func markVisibleRead() {
         guard appActive, let peer = activePeer else { return }
+        var sent = 0
         for message in conversation(peer) where !message.outgoing {
             unreadMessageIDs.remove("\(peer.id):\(message.id)")
-            sendRead(message.id, to: peer)
+            if sent < 20, sendRead(message.id, to: peer) { sent += 1 }
         }
     }
 
@@ -345,6 +413,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         if messages.count > 1000 {
             for message in messages.prefix(messages.count - 1000) {
                 unreadMessageIDs.remove("\(message.peerID.id):\(message.id)")
+                readAttempts["\(message.peerID.id):\(message.id)"] = nil
             }
             messages.removeFirst(messages.count - 1000)
         }
@@ -354,8 +423,47 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     // Explicit opt-in only, for the two owner-controlled test phones. Synthetic
     // messages target only another device advertising the same random test run.
     private var testedPeers: Set<PeerID> = []
+    private let testSession = UUID().uuidString
+    private var testConnectedPeers: Set<PeerID> = []
+    private var testEvents: [[String: Any]] = []
+    private var testCommands: Set<String> = []
+    private var testRadioResumeAt: Date?
+    private func recordSelfTestEvent(_ event: String, messageID: String? = nil) {
+        guard defaults.string(forKey: "SpotchatSelfTestRun") != nil else { return }
+        var row: [String: Any] = ["event": event, "active": appActive, "at": ISO8601DateFormatter().string(from: now())]
+        if let messageID { row["id"] = messageID }
+        testEvents.append(row)
+        if testEvents.count > 200 { testEvents.removeFirst(testEvents.count - 200) }
+    }
+    private func processSelfTestCommand(run: String) {
+        guard ProcessInfo.processInfo.arguments.contains("-SpotchatSelfTestStage5"), appActive,
+              let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+              let data = try? Data(contentsOf: directory.appendingPathComponent("spotchat-test-command.json")), data.count < 2048,
+              let command = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+              command["run"] == run, let id = command["id"], id.utf8.count <= 40, !testCommands.contains(id) else { return }
+        switch command["action"] {
+        case "send":
+            guard let peer = peers.first(where: { $0.name.hasPrefix("SC-\(run) ") && isNearby($0.id) }),
+                  send("Spotchat BLE test \(run) phase:\(id)", to: peer.id) else { return }
+            testCommands.insert(id)
+            recordSelfTestEvent("command-send", messageID: id)
+        case "pause-radio":
+            testCommands.insert(id)
+            testRadioResumeAt = now().addingTimeInterval(20)
+            transport.stopServices()
+            recordSelfTestEvent("radio-stop")
+        default: break
+        }
+    }
     private func runSelfTestIfRequested() {
         guard let run = defaults.string(forKey: "SpotchatSelfTestRun"), !run.isEmpty else { return }
+        if let resumeAt = testRadioResumeAt {
+            if now() < resumeAt { writeSelfTestResult(); return }
+            testRadioResumeAt = nil
+            transport.startServices()
+            recordSelfTestEvent("radio-start")
+        }
+        processSelfTestCommand(run: run)
         for peer in peers where peer.name.hasPrefix("SC-\(run) ") && !testedPeers.contains(peer.id) {
             if send("Spotchat BLE test \(run) от \(nickname)", to: peer.id) { testedPeers.insert(peer.id) }
         }
@@ -373,6 +481,21 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         let receivedPhotos = receivedProfiles.compactMap(\.avatar)
         let result: [String: Any] = [
             "run": run, "name": nickname, "transport": "BLEService",
+            "session": testSession, "appActive": appActive,
+            "activePeer": activePeer?.id ?? "",
+            "events": testEvents,
+            "messages": synthetic.map { message -> [String: Any] in
+                let state: String
+                switch message.status {
+                case .read: state = "read"
+                case .delivered: state = "delivered"
+                case .failed: state = "failed"
+                default: state = message.waitingForConnection ? "waiting" : "sending"
+                }
+                return ["id": message.id, "text": message.text, "outgoing": message.outgoing,
+                        "status": state, "attempts": message.attempts,
+                        "unread": unreadMessageIDs.contains("\(message.peerID.id):\(message.id)")]
+            },
             "bluetoothPoweredOn": bluetoothState == .poweredOn,
             "nearbyCount": peers.count,
             "profileReceivedCount": receivedProfiles.count,

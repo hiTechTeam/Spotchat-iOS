@@ -68,6 +68,14 @@ struct SpotchatRootView: View {
             .alert("Spotchat", isPresented: Binding(get: { runtime.error != nil }, set: { if !$0 { runtime.error = nil } })) {
                 Button("Понятно") { runtime.error = nil }
             } message: { Text(runtime.error ?? "") }
+            #if DEBUG
+            .onChange(of: runtime.peers) { peers in
+                guard ProcessInfo.processInfo.arguments.contains("-SpotchatSelfTestOpenChat"), path.isEmpty,
+                      let run = UserDefaults.standard.string(forKey: "SpotchatSelfTestRun"),
+                      let peer = peers.first(where: { $0.name.hasPrefix("SC-\(run) ") }) else { return }
+                path = [peer]
+            }
+            #endif
             #if DEBUG && targetEnvironment(simulator)
             .onAppear {
                 if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewProfile") { showProfile = true }
@@ -351,6 +359,10 @@ struct SpotchatMessageBubble: View {
             .contextMenu { Button { UIPasteboard.general.string = message.text } label: { Label("Скопировать", systemImage: "doc.on.doc") } }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(message.outgoing ? "Вы" : "Собеседник"): \(message.text), \(message.date.formatted(date: .omitted, time: .shortened))\(message.outgoing ? ", " + statusDescription : "")")
+            if message.outgoing && message.waitingForConnection {
+                Label("Ожидаем связь", systemImage: "antenna.radiowaves.left.and.right")
+                    .font(.caption).foregroundStyle(.secondary).padding(.vertical, 4)
+            }
             if message.outgoing, case .failed = message.status {
                 Button(action: retry) {
                     Label("Не доставлено · Повторить", systemImage: "arrow.clockwise")
@@ -381,6 +393,7 @@ struct SpotchatMessageBubble: View {
         }
     }
     private var statusDescription: String {
+        if message.waitingForConnection { return "Ожидаем связь" }
         switch message.status {
         case .read: return "Прочитано"
         case .delivered: return "Доставлено"
