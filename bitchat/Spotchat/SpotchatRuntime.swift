@@ -1,5 +1,6 @@
 import BitFoundation
 import Combine
+import CryptoKit
 import CoreBluetooth
 import Foundation
 
@@ -21,10 +22,11 @@ struct SpotchatMessage: Identifiable {
     var waitingForConnection = false
     var disconnectedWait: TimeInterval = 0
     var lastProgress: Date = .distantPast
+    var deliveryLabel: String?
 }
 
-/// Minimal local-only composition. Never instantiates AppRuntime/ChatViewModel,
-/// NostrTransport, MessageRouter, location services or Tor.
+/// Spotchat composition. Radio/session management stays inside the transport;
+/// permanent identity, history and routing belong to the application services.
 @MainActor
 final class SpotchatRuntime: ObservableObject, TransportEventDelegate, TransportPeerEventsDelegate {
     @Published private(set) var peers: [SpotchatPeer] = []
@@ -34,6 +36,9 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     @Published private(set) var bluetoothState: CBManagerState = .unknown
     @Published var error: String?
     let profiles: SpotchatProfiles
+    private(set) var permanent: SpotchatMessageStore?
+    private var permanentChanges: AnyCancellable?
+    private var setupFailed = false
     private var profileChanges: AnyCancellable?
     private(set) var activePeer: PeerID?
     private var appActive = true
@@ -59,7 +64,29 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         let ble = BLEService(keychain: keychain,
                              idBridge: NostrIdentityBridge(keychain: keychain),
                              identityManager: SecureIdentityStateManager(keychain))
-        return SpotchatRuntime(transport: ble, profileStore: .live())
+        let model = SpotchatRuntime(transport: ble, profileStore: .live())
+        // Legacy synthetic radio diagnostics remain isolated from real history.
+        if UserDefaults.standard.string(forKey: "SpotchatSelfTestRun") == nil {
+            do {
+                let identity = try SpotchatIdentityService(transport: ble, keychain: keychain, bridge: NostrIdentityBridge(keychain: keychain))
+                let card = try identity.card(name: model.nickname, bio: model.profiles.own.bio)
+                var preview = false
+                #if DEBUG && targetEnvironment(simulator)
+                preview = ProcessInfo.processInfo.arguments.contains("-SpotchatPermanentPreview")
+                #endif
+                let store = try SpotchatConversationStore(ownerID: card.id, key: identity.storageKey, url: preview ? nil : SpotchatConversationStore.liveURL)
+                let internet = preview ? nil : SpotchatNostrService(identity: identity.nostr, manager: .spotchat())
+                let permanent = SpotchatMessageStore(identity: identity, store: store, transport: ble, wire: ble, card: card, internet: internet)
+                model.permanent = permanent
+                permanent.onError = { [weak model] in model?.error = $0 }
+                model.permanentChanges = permanent.$revision.sink { [weak model] _ in model?.syncPermanentMessages() }
+                #if DEBUG && targetEnvironment(simulator)
+                if preview { try model.seedPermanentPreview() }
+                #endif
+                model.syncPermanentMessages()
+            } catch { model.setupFailed = true; model.error = error.localizedDescription }
+        }
+        return model
     }
 
     #if DEBUG && targetEnvironment(simulator)
@@ -102,6 +129,21 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
     #endif
 
+    #if DEBUG && targetEnvironment(simulator)
+    private func seedPermanentPreview() throws {
+        guard let permanent else { return }
+        for name in ["Аня", "Максим", "Соня", "Дима"] {
+            let noise = Curve25519.KeyAgreement.PrivateKey()
+            let signing = Curve25519.Signing.PrivateKey()
+            var card = SpotchatContactCard(noiseKey: noise.publicKey.rawRepresentation, signingKey: signing.publicKey.rawRepresentation,
+                nostrKey: try NostrIdentity.generate().publicKeyHex, name: name, bio: "Кофе, прогулки и хорошие разговоры")
+            card.signature = try signing.signature(for: card.signedBytes())
+            try permanent.add(card, source: "preview")
+            _ = permanent.send(name == "Максим" ? "Буду через десять минут" : "До встречи!", to: card)
+        }
+    }
+    #endif
+
     init(transport: Transport, defaults: UserDefaults = .standard,
          profileStore: SpotchatProfileStore = SpotchatProfileStore(),
          now: @escaping () -> Date = Date.init) {
@@ -138,9 +180,10 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     func start(runTimer: Bool = true) {
-        guard !started else { return }
+        guard !started, !setupFailed else { return }
         started = true
         transport.startServices()
+        permanent?.start()
         if runTimer {
             timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
                 .sink { [weak self] _ in self?.tick() }
@@ -152,6 +195,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         guard appActive != active else { return }
         appActive = active
         profiles.setAppActive(active)
+        permanent?.setActive(active)
         // Suspension is not a delivery failure. On return give the BLE/Noise
         // session a fresh acknowledgement interval before retrying.
         for index in messages.indices {
@@ -185,16 +229,65 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         guard profile.valid else { error = "Описание — до \(SpotchatProfile.maxBioCharacters) символов. Попробуйте выбрать фото ещё раз."; return false }
         do { try profiles.save(profile) }
         catch { self.error = "Не удалось сохранить профиль. Попробуйте ещё раз."; return false }
+        do { try permanent?.updateProfile(name: valid, bio: profile.bio) }
+        catch { self.error = error.localizedDescription; return false }
         nickname = valid
         defaults.set(valid, forKey: "spotchat.nickname")
         transport.setNickname(valid)
         return true
     }
 
-    func displayName(_ peer: SpotchatPeer) -> String { profiles.remote[peer.id]?.name ?? peers.first(where: { $0.id == peer.id })?.name ?? peer.name }
+    func displayName(_ peer: SpotchatPeer) -> String { permanent?.card(for: peer.id)?.name ?? profiles.remote[peer.id]?.name ?? peers.first(where: { $0.id == peer.id })?.name ?? peer.name }
+
+    var chatPeers: [SpotchatPeer] {
+        guard let permanent else { return peers }
+        return permanent.state.conversations.sorted { a, b in
+            let aTime = permanent.state.messages.last(where: { $0.envelope.conversationID == a.id })?.envelope.timestamp ?? Int64(a.createdAt.timeIntervalSince1970 * 1000)
+            let bTime = permanent.state.messages.last(where: { $0.envelope.conversationID == b.id })?.envelope.timestamp ?? Int64(b.createdAt.timeIntervalSince1970 * 1000)
+            return aTime > bTime
+        }.compactMap { conversation in
+            guard let contact = permanent.state.contacts.first(where: { $0.id == conversation.contactID }) else { return nil }
+            return SpotchatPeer(id: contact.card.peerID, name: contact.card.name, lastConnected: contact.addedAt)
+        }
+    }
+    func profile(for peer: PeerID) -> SpotchatProfile? {
+        if let permanent, let card = permanent.card(for: peer) {
+            let avatar = permanent.session(for: card).flatMap { profiles.remote[$0]?.avatar }
+                ?? permanent.state.contacts.first(where: { $0.id == card.id })?.avatar
+            return SpotchatProfile(name: card.name, bio: card.bio, avatar: avatar)
+        }
+        return profiles.remote[peer]
+    }
+    func addContact(_ card: SpotchatContactCard, source: String) -> SpotchatPeer? {
+        do {
+            guard let permanent else { throw SpotchatFailure.unavailableIdentity }
+            try permanent.add(card, source: source, avatar: permanent.session(for: card).flatMap { profiles.remote[$0]?.avatar })
+            return SpotchatPeer(id: card.peerID, name: card.name, lastConnected: Date())
+        } catch { self.error = error.localizedDescription; return nil }
+    }
+    private func syncPermanentMessages() {
+        guard let permanent else { return }
+        messages = permanent.state.messages.map { stored in
+            let card = stored.outgoing ? stored.envelope.recipient : stored.envelope.sender
+            let status: DeliveryStatus
+            switch stored.status {
+            case .queued: status = .sending
+            case .forwarding: status = .sent
+            case .delivered: status = .delivered(to: card.name, at: stored.deliveredAt ?? Date())
+            case .read: status = .read(by: card.name, at: stored.readAt ?? Date())
+            case .expired: status = .failed(reason: "Срок доставки истёк")
+            }
+            return SpotchatMessage(id: stored.id, peerID: card.peerID, text: stored.text,
+                date: Date(timeIntervalSince1970: Double(stored.envelope.timestamp) / 1000), outgoing: stored.outgoing,
+                status: status, attempts: stored.attempts, deliveryLabel: stored.status == .forwarding && stored.deliveryTransport == "mesh" ? "Передаётся через mesh" : stored.status.label)
+        }
+        unreadMessageIDs = Set(permanent.state.messages.filter { $0.unread }.map { "\($0.envelope.sender.peerID.id):\($0.id)" })
+        objectWillChange.send()
+    }
 
     func openConversation(_ peer: PeerID?) {
         activePeer = peer
+        if let permanent { permanent.open(peer.flatMap { permanent.card(for: $0) }); return }
         if let peer, transport.isPeerConnected(peer) { transport.triggerHandshake(with: peer) }
         markVisibleRead()
     }
@@ -208,11 +301,18 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     func isNearby(_ peer: PeerID) -> Bool {
-        bluetoothState == .poweredOn && transport.isPeerConnected(peer)
+        guard bluetoothState == .poweredOn else { return false }
+        if let permanent, let card = permanent.card(for: peer) { return permanent.session(for: card) != nil }
+        return transport.isPeerConnected(peer)
     }
 
     @discardableResult
     func send(_ text: String, to peer: PeerID) -> Bool {
+        guard !setupFailed else { return false }
+        if let permanent {
+            guard let card = permanent.card(for: peer) else { error = "Дождитесь проверки профиля собеседника."; return false }
+            return permanent.send(text, to: card)
+        }
         let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return false }
         // Upstream private-message TLV has a one-byte length. Reject visibly
@@ -234,6 +334,10 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     func retry(_ message: SpotchatMessage) {
+        if let permanent, let card = permanent.card(for: message.peerID) {
+            if case .failed = message.status { _ = permanent.send(message.text, to: card) }
+            return
+        }
         guard message.outgoing, isNearby(message.peerID),
               let index = messages.firstIndex(where: { $0.id == message.id && $0.outgoing }) else { return }
         guard case .failed = messages[index].status else { return }
@@ -259,7 +363,10 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         didUpdatePeerSnapshots(transport.currentPeerSnapshots())
         if appActive {
             if transport is SpotchatProfileTransporting, bluetoothState == .poweredOn { profiles.tick() }
-            advancePendingMessages()
+            if let permanent {
+                permanent.tick(connected: Set(peers.filter { transport.isPeerConnected($0.id) }.map(\.id)), active: appActive)
+                for peer in peers { if let profile = profiles.remote[peer.id] { permanent.updateAvatar(profile.avatar, for: peer.id) } }
+            } else { advancePendingMessages() }
             markVisibleRead()
         }
         #if DEBUG
@@ -329,6 +436,8 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         case .peerConnected, .peerDisconnected, .peerListUpdated:
             didUpdatePeerSnapshots(transport.currentPeerSnapshots())
         case .noisePayloadReceived(let peer, let type, let data, let date):
+            if type == .spotchatEnvelope { permanent?.receiveBytes(data, from: peer); return }
+            if permanent != nil && type != .spotchatProfile { return }
             switch type {
             case .spotchatProfile:
                 profiles.receive(data, from: peer)
@@ -362,6 +471,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
             default: break
             }
         case .messageDeliveryStatusUpdated(let id, let status):
+            guard permanent == nil else { return }
             guard let index = messages.firstIndex(where: { $0.id == id && $0.outgoing }) else { return }
             // A local write or a late retry callback cannot override a receipt
             // or turn a timed-out message back into an endless spinner.
@@ -401,6 +511,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     private func markVisibleRead() {
+        guard permanent == nil else { return }
         guard appActive, let peer = activePeer else { return }
         var sent = 0
         for message in conversation(peer) where !message.outgoing {

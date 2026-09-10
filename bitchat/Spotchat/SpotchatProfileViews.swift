@@ -12,6 +12,7 @@ struct SpotchatOwnProfileSheet: View {
     @State private var processing = false
     @State private var photoError: String?
     @State private var showPhoto = false
+    @State private var showQR = false
 
     init(runtime: SpotchatRuntime) {
         self.runtime = runtime
@@ -43,6 +44,9 @@ struct SpotchatOwnProfileSheet: View {
                         Spacer(minLength: 8)
                         Text("\(bio.count)/\(SpotchatProfile.maxBioCharacters)").monospacedDigit()
                     }.font(.caption).foregroundStyle(.secondary)
+                    if runtime.permanent != nil {
+                        Button { showQR = true } label: { Label("Мой QR-код", systemImage: "qrcode") }
+                    }
                     if avatar != nil {
                         Button("Удалить фото", role: .destructive) { avatar = nil; selection = nil }
                             .font(.footnote).disabled(processing)
@@ -79,6 +83,7 @@ struct SpotchatOwnProfileSheet: View {
             .alert("Профиль", isPresented: Binding(get: { photoError != nil }, set: { if !$0 { photoError = nil } })) {
                 Button("Понятно") { photoError = nil }
             } message: { Text(photoError ?? "") }
+            .sheet(isPresented: $showQR) { if let card = runtime.permanent?.ownCard { SpotchatQRView(card: card) } }
             .fullScreenCover(isPresented: $showPhoto) {
                 if let avatar { SpotchatPhotoViewer(data: avatar) }
             }
@@ -91,7 +96,7 @@ struct SpotchatPeerProfileSheet: View {
     @ObservedObject var runtime: SpotchatRuntime
     let peer: SpotchatPeer
     @State private var showPhoto = false
-    private var profile: SpotchatProfile? { runtime.profiles.remote[peer.id] }
+    private var profile: SpotchatProfile? { runtime.profile(for: peer.id) }
     var body: some View {
         VStack(spacing: 8) {
             Spacer(minLength: 0)

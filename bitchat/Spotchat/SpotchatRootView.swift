@@ -6,13 +6,15 @@ struct SpotchatRootView: View {
     @ObservedObject var runtime: SpotchatRuntime
     @State private var path: [SpotchatPeer] = []
     @State private var showProfile = false
+    @State private var showContacts = false
+    @State private var invitation: SpotchatContactCard?
     @State private var selectedPeer: SpotchatPeer?
 
     var body: some View {
         NavigationStack(path: $path) {
             List {
                 Section {
-                    ForEach(runtime.peers) { peer in
+                    ForEach(runtime.chatPeers) { peer in
                         Button { path.append(peer) } label: {
                             peerRow(peer)
                         }
@@ -26,21 +28,25 @@ struct SpotchatRootView: View {
                         Circle().fill(runtime.bluetoothState == .poweredOn ? Color.green : Color.secondary)
                             .frame(width: 6, height: 6)
                         Text(statusText).font(.subheadline).textCase(nil)
+                        if let count = runtime.permanent?.state.requests.count, count > 0 {
+                            Spacer()
+                            Button("Приглашения: \(count)") { showContacts = true }.font(.caption).textCase(nil)
+                        }
                     }.padding(.bottom, 8)
                 }
-                if runtime.peers.isEmpty {
+                if runtime.chatPeers.isEmpty {
                     VStack(spacing: 14) {
                         Image(systemName: "person.2.wave.2")
                             .font(.system(size: 36, weight: .light)).foregroundStyle(.blue)
                             .frame(width: 88, height: 88)
                             .background(Color.blue.opacity(0.07), in: Circle())
-                        Text("Знакомые рядом").font(.title3.weight(.semibold))
-                        Text("Откройте Spotchat на другом iPhone.\nКогда он окажется рядом, вы сможете написать друг другу.")
+                        Text(runtime.permanent == nil ? "Знакомые рядом" : "Ваши разговоры").font(.title3.weight(.semibold))
+                        Text(runtime.permanent == nil ? "Откройте Spotchat на другом iPhone.\nКогда он окажется рядом, вы сможете написать друг другу." : "Нажмите +, чтобы добавить контакт.\nПереписка сохранится, даже когда человек уйдёт.")
                             .font(.subheadline).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center).lineSpacing(3)
                     }.frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.vertical, 60)
                         .listRowSeparator(.hidden)
-                } else {
+                } else if runtime.permanent == nil {
                     Text("Здесь только те, кто рядом")
                         .font(.footnote).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity).padding(.top, 24)
@@ -51,6 +57,10 @@ struct SpotchatRootView: View {
             .navigationTitle("Spotchat")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { showContacts = true } label: { Image(systemName: "plus").font(.system(size: 22)) }
+                        .accessibilityLabel("Добавить контакт").accessibilityIdentifier("spotchat.addContact")
+                }
                 SpotchatAvatarToolbar {
                     Button { showProfile = true } label: {
                         SpotchatAvatar(name: runtime.nickname, size: 34, imageData: runtime.profiles.own.avatar)
@@ -60,6 +70,21 @@ struct SpotchatRootView: View {
             }
             .navigationDestination(for: SpotchatPeer.self) { peer in
                 SpotchatConversationView(runtime: runtime, peer: peer)
+            }
+            .fullScreenCover(isPresented: $showContacts) {
+                SpotchatContactsView(runtime: runtime) { peer in
+                    showContacts = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { path.append(peer) }
+                }
+            }
+            .onOpenURL { url in
+                do { invitation = try SpotchatContactCard.parse(url) }
+                catch { runtime.error = error.localizedDescription }
+            }
+            .sheet(item: $invitation) { card in
+                SpotchatContactConfirmation(card: card) {
+                    if let peer = runtime.addContact(card, source: "QR") { path.append(peer) }
+                }
             }
             .sheet(isPresented: $showProfile) { SpotchatOwnProfileSheet(runtime: runtime) }
             .sheet(item: $selectedPeer) { peer in
@@ -78,6 +103,8 @@ struct SpotchatRootView: View {
             #endif
             #if DEBUG && targetEnvironment(simulator)
             .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewContacts") { showContacts = true }
+                if ProcessInfo.processInfo.arguments.contains("-SpotchatPermanentChat"), let peer = runtime.chatPeers.first(where: { $0.name == "Максим" }), path.isEmpty { path = [peer] }
                 if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewProfile") { showProfile = true }
                 if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewPeerProfile") { selectedPeer = runtime.peers.first }
                 if ProcessInfo.processInfo.arguments.contains("-SpotchatPreviewChat"), path.isEmpty,
@@ -91,7 +118,7 @@ struct SpotchatRootView: View {
         let last = runtime.conversation(peer.id).last
         let unread = runtime.unreadCount(for: peer.id)
         return HStack(spacing: 14) {
-            SpotchatAvatar(name: runtime.displayName(peer), size: 58, nearby: runtime.isNearby(peer.id), imageData: runtime.profiles.remote[peer.id]?.avatar)
+            SpotchatAvatar(name: runtime.displayName(peer), size: 58, nearby: runtime.isNearby(peer.id), imageData: runtime.profile(for: peer.id)?.avatar)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(runtime.displayName(peer)).font(.system(size: 17, weight: .semibold)).lineLimit(1)
@@ -197,9 +224,9 @@ struct SpotchatConversationView: View {
                     LazyVStack(spacing: 0) {
                         if conversation.isEmpty {
                             VStack(spacing: 12) {
-                                SpotchatAvatar(name: name, size: 70, imageData: runtime.profiles.remote[peer.id]?.avatar)
+                                SpotchatAvatar(name: name, size: 70, imageData: runtime.profile(for: peer.id)?.avatar)
                                 Text("Скажите привет").font(.headline)
-                                Text("\(name) рядом.\nДля разговора достаточно Bluetooth.")
+                                Text(runtime.isNearby(peer.id) ? "\(name) рядом.\nДля разговора достаточно Bluetooth." : "Напишите первое сообщение.\nОно дождётся возможности доставки.")
                                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                             }
                             .multilineTextAlignment(.center)
@@ -266,7 +293,7 @@ struct SpotchatConversationView: View {
             }
             SpotchatAvatarToolbar {
                 Button { inputFocused = false; showPeerProfile = true } label: {
-                    SpotchatAvatar(name: name, size: 34, imageData: runtime.profiles.remote[peer.id]?.avatar)
+                    SpotchatAvatar(name: name, size: 34, imageData: runtime.profile(for: peer.id)?.avatar)
                         .frame(width: 44, height: 44).contentShape(Circle())
                 }.buttonStyle(.plain).accessibilityLabel("Профиль собеседника")
             }
@@ -280,10 +307,6 @@ struct SpotchatConversationView: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
-            if !runtime.isNearby(peer.id) {
-                Label("Собеседник отошёл. Подождём его рядом", systemImage: "antenna.radiowaves.left.and.right.slash")
-                    .font(.caption).foregroundStyle(.secondary).padding(.top, 6)
-            }
             HStack(alignment: .bottom, spacing: 8) {
                 HStack(alignment: .bottom, spacing: 0) {
                 TextField("Сообщение", text: $draft, prompt: Text("Сообщение").foregroundColor(Color(.secondaryLabel)), axis: .vertical)
@@ -312,14 +335,14 @@ struct SpotchatConversationView: View {
                         .foregroundStyle(.white).frame(width: 46, height: 46)
                         .background(Color(uiColor: .systemBlue), in: Circle())
                         .contentShape(Circle())
-                }.buttonStyle(.plain).disabled(!runtime.isNearby(peer.id))
+                }.buttonStyle(.plain).disabled(!canSend)
                     .accessibilityLabel("Отправить сообщение").accessibilityIdentifier("spotchat.sendMessage")
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(Color(.systemBackground))
     }
-    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && runtime.isNearby(peer.id) }
+    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (runtime.permanent != nil || runtime.isNearby(peer.id)) }
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.22)) { proxy.scrollTo("conversation-bottom", anchor: .bottom) }
     }
@@ -359,6 +382,9 @@ struct SpotchatMessageBubble: View {
             .contextMenu { Button { UIPasteboard.general.string = message.text } label: { Label("Скопировать", systemImage: "doc.on.doc") } }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(message.outgoing ? "Вы" : "Собеседник"): \(message.text), \(message.date.formatted(date: .omitted, time: .shortened))\(message.outgoing ? ", " + statusDescription : "")")
+            if message.outgoing, let label = message.deliveryLabel, label == "В очереди" || label.hasPrefix("Передаётся") {
+                Text(label).font(.caption).foregroundStyle(.secondary).padding(.top, 2)
+            }
             if message.outgoing && message.waitingForConnection {
                 Label("Ожидаем связь", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.caption).foregroundStyle(.secondary).padding(.vertical, 4)

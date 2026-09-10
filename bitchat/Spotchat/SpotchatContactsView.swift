@@ -1,0 +1,186 @@
+#if os(iOS)
+import BitFoundation
+import Contacts
+import ContactsUI
+import CoreImage.CIFilterBuiltins
+import SwiftUI
+
+extension SpotchatContactCard: Identifiable {}
+
+struct SpotchatContactsView: View {
+    @ObservedObject var runtime: SpotchatRuntime
+    var select: (SpotchatPeer) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+    @State private var showQR = false
+    @State private var showScanner = false
+    @State private var showPhoneBook = false
+    @State private var invitation: SpotchatContactCard?
+    @State private var share: SpotchatShareItem?
+    private var service: SpotchatMessageStore? { runtime.permanent }
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button { showScanner = true } label: { Label("Сканировать QR-код", systemImage: "qrcode.viewfinder") }
+                    Button { showQR = true } label: { Label("Мой QR-код", systemImage: "qrcode") }
+                    Button { showPhoneBook = true } label: { Label("Пригласить из контактов", systemImage: "person.badge.plus") }
+                }
+                if let requests = service?.state.requests, !requests.isEmpty {
+                    Section("Приглашения") {
+                        ForEach(requests) { card in
+                            Button { invitation = card } label: { contactRow(card, nearby: false, detail: "Хочет добавить вас", add: true) }
+                                .swipeActions { Button("Отклонить", role: .destructive) { service?.dismissRequest(card) } }
+                        }
+                    }
+                }
+                Section("Рядом") {
+                    let cards = (service?.nearby.values.map { $0 } ?? []).filter(matches).sorted { $0.name < $1.name }
+                    if cards.isEmpty { Text("Ищем пользователей Spotchat поблизости…").font(.subheadline).foregroundStyle(.secondary) }
+                    ForEach(cards) { card in
+                        Button { open(card, source: "nearby") } label: {
+                            contactRow(card, nearby: true, detail: "Можно добавить без интернета", add: !isSaved(card))
+                        }.buttonStyle(.plain)
+                    }
+                }
+                Section("Сохранённые") {
+                    ForEach((service?.state.contacts ?? []).filter { matches($0.card) }.sorted { $0.card.name < $1.card.name }) { contact in
+                        Button { open(contact.card, source: "saved") } label: {
+                            contactRow(contact.card, nearby: runtime.isNearby(contact.card.peerID), detail: nil, add: false)
+                        }.buttonStyle(.plain)
+                    }
+                }
+            }
+            .searchable(text: $search, prompt: "Поиск")
+            .navigationTitle("Контакты").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } } }
+            .sheet(isPresented: $showQR) { if let card = service?.ownCard { SpotchatQRView(card: card) } }
+            .sheet(isPresented: $showScanner) { SpotchatScanView { card in showScanner = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { invitation = card } } }
+            .sheet(isPresented: $showPhoneBook) {
+                SpotchatPhoneBook { contact in
+                    showPhoneBook = false
+                    guard let card = service?.ownCard, let url = try? card.invitation() else { return }
+                    let name = CNContactFormatter.string(from: contact, style: .fullName) ?? ""
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        share = SpotchatShareItem(text: "\(name.isEmpty ? "Привет" : name), добавь меня в Spotchat. Открой приглашение в установленном приложении:", url: url)
+                    }
+                }
+            }
+            .sheet(item: $share) { SpotchatShareSheet(items: [$0.text, $0.url]) }
+            .sheet(item: $invitation) { card in SpotchatContactConfirmation(card: card) { open(card, source: "invitation") } }
+        }.tint(.blue)
+    }
+    private func matches(_ card: SpotchatContactCard) -> Bool { search.isEmpty || card.name.localizedCaseInsensitiveContains(search) }
+    private func isSaved(_ card: SpotchatContactCard) -> Bool { service?.state.contacts.contains { $0.id == card.id } == true }
+    private func open(_ card: SpotchatContactCard, source: String) {
+        guard let peer = runtime.addContact(card, source: source) else { return }
+        dismiss(); select(peer)
+    }
+    private func contactRow(_ card: SpotchatContactCard, nearby: Bool, detail: String?, add: Bool) -> some View {
+        HStack(spacing: 12) {
+            SpotchatAvatar(name: card.name, size: 48, nearby: nearby, imageData: runtime.profile(for: card.peerID)?.avatar)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(card.name).font(.body.weight(.semibold)).foregroundStyle(.primary)
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+            }
+            Spacer()
+            Image(systemName: add ? "plus.circle.fill" : "chevron.right").foregroundStyle(add ? Color.blue : .secondary)
+        }.padding(.vertical, 3)
+    }
+}
+struct SpotchatContactConfirmation: View {
+    let card: SpotchatContactCard
+    var accept: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(spacing: 18) {
+            SpotchatAvatar(name: card.name, size: 110)
+            Text(card.name).font(.title2.bold())
+            if !card.bio.isEmpty { Text(card.bio).font(.subheadline).multilineTextAlignment(.center) }
+            Text("Сохранить контакт Spotchat?").foregroundStyle(.secondary)
+            Button("Добавить контакт") { dismiss(); accept() }.buttonStyle(.borderedProminent).controlSize(.large)
+            Button("Отмена") { dismiss() }
+        }.padding(24).presentationDetents([.medium]).presentationDragIndicator(.visible)
+    }
+}
+struct SpotchatQRView: View {
+    let card: SpotchatContactCard
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 22) {
+                Text(card.name).font(.title2.bold())
+                if let url = try? card.invitation(), let image = qr(url.absoluteString) {
+                    Image(uiImage: image).interpolation(.none).resizable().scaledToFit()
+                        .padding(18).background(.white, in: RoundedRectangle(cornerRadius: 20))
+                        .frame(maxWidth: 300).accessibilityLabel("QR-код контакта Spotchat")
+                    Text("Покажите этот код другому человеку.\nДля добавления интернет не нужен.")
+                        .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    ShareLink(item: url) { Label("Поделиться приглашением", systemImage: "square.and.arrow.up") }
+                }
+            }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(.systemBackground))
+                .navigationTitle("Мой QR-код").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }
+        }
+    }
+    private func qr(_ text: String) -> UIImage? {
+        let filter = CIFilter.qrCodeGenerator(); filter.message = Data(text.utf8); filter.correctionLevel = "M"
+        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 6, y: 6)), let image = CIContext().createCGImage(output, from: output.extent) else { return nil }
+        return UIImage(cgImage: image)
+    }
+}
+struct SpotchatScanView: View {
+    var scanned: (SpotchatContactCard) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var done = false
+    @State private var unavailable = false
+    @State private var error: String?
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if unavailable {
+                    VStack(spacing: 16) {
+                        Text("Разрешите доступ к камере в настройках iPhone.").multilineTextAlignment(.center)
+                        Button("Открыть настройки") { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } }
+                    }.foregroundStyle(.white).padding()
+                } else {
+                    CameraScannerView(isActive: !done, onUnavailable: { unavailable = true }) { text in
+                        guard !done else { return }; done = true
+                        do {
+                            guard let url = URL(string: text) else { throw SpotchatFailure.invalidContact }
+                            scanned(try SpotchatContactCard.parse(url))
+                        } catch { self.error = error.localizedDescription }
+                    }
+                }
+            }.navigationTitle("Сканировать QR-код").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Отмена") { done = true; dismiss() } } }
+                .alert("QR-код", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil; done = false } })) { Button("Повторить") { error = nil; done = false } } message: { Text(error ?? "") }
+                .onDisappear { done = true }
+        }
+    }
+}
+struct SpotchatPhoneBook: UIViewControllerRepresentable {
+    var selected: (CNContact) -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(selected: selected) }
+    func makeUIViewController(context: Context) -> CNContactPickerViewController {
+        // The system picker grants access only to the chosen contact. No bulk
+        // CNContactStore fetch, upload or phone-number-based identity is used.
+        _ = CNContactStore.authorizationStatus(for: .contacts)
+        let picker = CNContactPickerViewController(); picker.delegate = context.coordinator; return picker
+    }
+    func updateUIViewController(_ controller: CNContactPickerViewController, context: Context) {}
+    final class Coordinator: NSObject, CNContactPickerDelegate {
+        let selected: (CNContact) -> Void
+        init(selected: @escaping (CNContact) -> Void) { self.selected = selected }
+        func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) { selected(contact) }
+    }
+}
+struct SpotchatShareItem: Identifiable { let id = UUID(); let text: String; let url: URL }
+struct SpotchatShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: items, applicationActivities: nil) }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+#endif

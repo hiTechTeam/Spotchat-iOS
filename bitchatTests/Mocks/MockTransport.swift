@@ -77,7 +77,9 @@ final class MockTransport: Transport, PrivateMediaDeletionPersisting,
     /// Optional synchronous hook for send-ordering tests (for example, an ack
     /// arriving before the router's send call returns).
     var onSendPrivateMessage: (@MainActor (_ messageID: String) -> Void)?
-    private let mockKeychain = MockKeychain()
+    let mockKeychain = MockKeychain()
+    var spotchatSessionKeys: [PeerID: Data] = [:]
+    var spotchatPackets: [(PeerID, Data)] = []
 
     // MARK: - Transport Protocol Implementation
 
@@ -146,7 +148,7 @@ final class MockTransport: Transport, PrivateMediaDeletionPersisting,
     private(set) lazy var mockNoiseService = NoiseEncryptionService(keychain: mockKeychain)
 
     func noiseSessionPublicKeyData(for peerID: PeerID) -> Data? {
-        mockNoiseService.getPeerPublicKeyData(peerID)
+        spotchatSessionKeys[peerID] ?? mockNoiseService.getPeerPublicKeyData(peerID)
     }
 
     func noiseIdentityFingerprint() -> String {
@@ -460,4 +462,11 @@ final class MockTransport: Transport, PrivateMediaDeletionPersisting,
         }
         updatePeerSnapshots(snapshots)
     }
+}
+
+
+extension MockTransport: SpotchatSecureTransport {
+    func sendSpotchatPacket(_ data: Data, to peer: PeerID) { spotchatPackets.append((peer, data)) }
+    func sealSpotchatPayload(_ data: Data, recipient: Data) throws -> Data { try mockNoiseService.sealCourierPayload(data, recipientStaticKey: recipient) }
+    func openSpotchatPayload(_ data: Data) throws -> (payload: Data, senderStaticKey: Data) { try mockNoiseService.openCourierPayload(data) }
 }

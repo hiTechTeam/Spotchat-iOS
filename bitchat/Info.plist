@@ -23,6 +23,7 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
+				<string>spotchat</string>
 				<string>bitchat</string>
 			</array>
 		</dict>
@@ -37,8 +38,10 @@
 	<string>Spotchat использует Bluetooth, чтобы находить людей рядом и передавать сообщения без интернета.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Spotchat использует Bluetooth для общения с людьми рядом.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Выберите человека, чтобы поделиться приглашением Spotchat.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>bitchat uses the camera to scan QR codes to verify peers.</string>
+	<string>Spotchat использует камеру для добавления контактов по QR-коду.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>bitchat uses your location to compute optional geohash channels, bridge cells, and nearby place labels. Exact coordinates are not included in bitchat messages.</string>
 	<key>NSMicrophoneUsageDescription</key>

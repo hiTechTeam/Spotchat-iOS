@@ -1944,3 +1944,21 @@ private extension TimeInterval {
         return Int(self)
     }
 }
+
+// Spotchat has its own contact gate; it does not instantiate upstream location,
+// favorites, Tor or ChatViewModel singletons. Reuse the same relay engine.
+extension NostrRelayManager {
+    static func spotchat() -> NostrRelayManager {
+        let session = URLSession(configuration: .ephemeral)
+        return NostrRelayManager(dependencies: NostrRelayManagerDependencies(
+            activationAllowed: { true }, userTorEnabled: { false },
+            hasMutualFavorites: { true }, hasLocationPermission: { false },
+            mutualFavoritesPublisher: Empty().eraseToAnyPublisher(),
+            locationPermissionPublisher: Empty().eraseToAnyPublisher(),
+            torEnforced: { false }, torIsReady: { true }, torIsForeground: { true },
+            awaitTorReady: { $0(true) }, makeSession: { URLSessionAdapter(base: session) },
+            scheduleAfter: { delay, action in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action) },
+            now: Date.init, jitterUnit: { Double.random(in: 0..<1) }
+        ))
+    }
+}

@@ -4358,6 +4358,20 @@ extension BLEService {
 
 
     
+    // Spotchat application envelopes reuse the existing Noise and BLE packet path.
+    func sendSpotchatPacket(_ data: Data, to peer: PeerID) {
+        guard data.count <= 24_000, isPeerConnected(peer) else { return }
+        sendNoisePayload(NoisePayload(type: .spotchatEnvelope, data: data).encode(), to: peer)
+    }
+
+    func sealSpotchatPayload(_ data: Data, recipient: Data) throws -> Data {
+        try noiseService.sealCourierPayload(data, recipientStaticKey: recipient)
+    }
+
+    func openSpotchatPayload(_ data: Data) throws -> (payload: Data, senderStaticKey: Data) {
+        try noiseService.openCourierPayload(data)
+    }
+
     func sendSpotchatProfile(_ data: Data, to peer: PeerID) {
         guard data.count <= SpotchatProfilePacket.maxWireBytes, isPeerConnected(peer) else { return }
         sendNoisePayload(NoisePayload(type: .spotchatProfile, data: data).encode(), to: peer)
