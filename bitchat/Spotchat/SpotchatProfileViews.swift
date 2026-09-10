@@ -93,40 +93,56 @@ struct SpotchatPeerProfileSheet: View {
     @State private var showPhoto = false
     private var profile: SpotchatProfile? { runtime.profiles.remote[peer.id] }
     var body: some View {
-        GeometryReader { geometry in
-        let avatarSize = min(280, max(180, (min(geometry.size.width - 56, geometry.size.height - 160) - 24) * 0.936))
-        ScrollView {
-        VStack(spacing: 16) {
-            Button { showPhoto = profile?.avatar != nil } label: {
-                SpotchatAvatar(name: runtime.displayName(peer), size: avatarSize, imageData: profile?.avatar)
-            }.buttonStyle(.plain)
-                .frame(maxWidth: .infinity, alignment: .center)
+        VStack(spacing: 8) {
+            Spacer(minLength: 0)
+            GeometryReader { geometry in
+                // Same available-space calculation as Telescan's ProfileSheetView.
+                let availableSize = max(0, min(geometry.size.width, geometry.size.height) - 24)
+                let avatarSize = availableSize * 0.9 * 1.04
+                Button { showPhoto = profile?.avatar != nil } label: {
+                    SpotchatAvatar(name: runtime.displayName(peer), size: avatarSize, imageData: profile?.avatar)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .offset(y: -10)
                 .accessibilityLabel("Посмотреть фото собеседника")
-            VStack(spacing: 5) {
-                Text(runtime.displayName(peer)).font(.system(size: 28, weight: .semibold)).multilineTextAlignment(.center)
-                HStack(spacing: 5) {
-                    Circle().fill(runtime.isNearby(peer.id) ? Color.green : Color.secondary).frame(width: 6, height: 6)
-                    Text(runtime.isNearby(peer.id) ? "Рядом" : "Сейчас не рядом").font(.subheadline).foregroundStyle(.secondary)
+            }
+            VStack(spacing: 0) {
+                VStack(spacing: 3) {
+                    Text(runtime.displayName(peer)).font(.title.bold()).multilineTextAlignment(.center)
+                    HStack(spacing: 5) {
+                        Circle().fill(runtime.isNearby(peer.id) ? Color.green : Color.secondary).frame(width: 6, height: 6)
+                        Text(runtime.isNearby(peer.id) ? "Рядом" : "Сейчас не рядом")
+                            .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                    }
+                }
+                .offset(y: -10)
+                if let bio = profile?.bio, !bio.isEmpty {
+                    Text(String(bio.prefix(SpotchatProfile.maxBioCharacters)))
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(minHeight: 48)
+                } else {
+                    Color.clear.frame(height: 48).accessibilityHidden(true)
+                }
+                if runtime.profiles.loading.contains(peer.id) {
+                    HStack(spacing: 6) { ProgressView(); Text("Загружаем фото…").font(.caption).foregroundStyle(.secondary) }
+                } else if runtime.profiles.failed.contains(peer.id), runtime.isNearby(peer.id) {
+                    Button("Обновить профиль") { runtime.profiles.refresh(peer.id) }.font(.caption)
                 }
             }
-            if runtime.profiles.loading.contains(peer.id) {
-                HStack(spacing: 6) { ProgressView(); Text("Загружаем фото…").font(.caption).foregroundStyle(.secondary) }
-            } else if runtime.profiles.failed.contains(peer.id), runtime.isNearby(peer.id) {
-                Button("Обновить профиль") { runtime.profiles.refresh(peer.id) }.font(.caption)
-            }
-            if let bio = profile?.bio, !bio.isEmpty {
-                Text(String(bio.prefix(SpotchatProfile.maxBioCharacters))).font(.body).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 8)
-            }
+            .frame(maxWidth: 360)
+            .padding(.horizontal, 20)
+            // Preserve Telescan's 50 pt footer space without its message button.
+            .padding(.bottom, 50)
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutPriority(1)
         }
-        .frame(maxWidth: .infinity, minHeight: max(0, geometry.size.height - 48), alignment: .center)
-        .padding(.horizontal, 28).padding(.vertical, 24)
-        }
-        }
+        .padding(.top, 60)
+        .offset(y: -10)
         .background(Color(.systemBackground))
-        .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+        .presentationDetents([.medium]).presentationDragIndicator(.visible)
         .onAppear { if profile == nil || runtime.profiles.failed.contains(peer.id) { runtime.profiles.refresh(peer.id) } }
         .fullScreenCover(isPresented: $showPhoto) {
             if let data = profile?.avatar { SpotchatPhotoViewer(data: data) }
