@@ -24,6 +24,7 @@ final class SpotchatMessageStore: ObservableObject {
     private var foreground = true
     private var tickNumber = 0
     private var localSessionID: PeerID?
+    private var retired = false
 
     init(identity: SpotchatIdentityService, store: SpotchatConversationStore, transport: Transport,
          wire: SpotchatSecureTransport, card: SpotchatContactCard,
@@ -34,8 +35,9 @@ final class SpotchatMessageStore: ObservableObject {
         internet?.received = { [weak self] packet, sender in self?.receive(packet, from: nil, nostrSender: sender) }
     }
     var state: SpotchatDatabase { store.state }
-    func start() { if foreground { internet?.start() } }
+    func start() { if !retired && foreground { internet?.start() } }
     func setActive(_ active: Bool) {
+        guard !retired else { return }
         foreground = active
         if active { internet?.start(); markRead() }
         else { internet?.stop() }
@@ -50,6 +52,8 @@ final class SpotchatMessageStore: ObservableObject {
         nearby.first(where: { $0.value.id == card.id && transport.isPeerConnected($0.key) && transport.noiseSessionPublicKeyData(for: $0.key) == card.noiseKey })?.key
     }
     func add(_ card: SpotchatContactCard, source: String, avatar: Data? = nil) throws {
+        guard !retired else { throw SpotchatFailure.unavailableIdentity }
+        guard !isBlocked(card) else { throw SpotchatFailure.blocked }
         try contacts.add(card, source: source, avatar: avatar, now: now())
         try store.transaction { $0.requests.removeAll { $0.id == card.id } }
         try contacts.conversation(with: card, now: now()); changed()
@@ -61,17 +65,21 @@ final class SpotchatMessageStore: ObservableObject {
         do { try store.transaction { $0.requests.removeAll { $0.id == card.id } }; changed() } catch { fail(error) }
     }
     func open(_ card: SpotchatContactCard?) {
+        guard !retired else { return }
         activeContact = card?.id
         if let card { do { try contacts.conversation(with: card, now: now()); changed() } catch { fail(error) } }
         markRead()
     }
     func updateAvatar(_ avatar: Data?, for peer: PeerID) {
+        guard !retired else { return }
         guard (avatar?.count ?? 0) <= 40_960, let card = nearby[peer],
               let index = state.contacts.firstIndex(where: { $0.id == card.id }), state.contacts[index].avatar != avatar else { return }
         do { try store.transaction { $0.contacts[index].avatar = avatar }; changed() } catch { fail(error) }
     }
     @discardableResult
     func send(_ text: String, to card: SpotchatContactCard) -> Bool {
+        guard !retired else { return false }
+        guard !isBlocked(card) else { fail(SpotchatFailure.blocked); return false }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.utf8.count <= 4096 else { onError?("Сообщение должно быть не длиннее 4096 байт."); return false }
         do {
@@ -91,6 +99,7 @@ final class SpotchatMessageStore: ObservableObject {
         } catch { fail(error); return false }
     }
     func tick(connected: Set<PeerID>, active: Bool) {
+        guard !retired else { return }
         tickNumber += 1
         if localSessionID != transport.myPeerID {
             localSessionID = transport.myPeerID
@@ -105,11 +114,12 @@ final class SpotchatMessageStore: ObservableObject {
         }
         do {
             let ms = Int64(now().timeIntervalSince1970 * 1000)
-            if state.relay.contains(where: { $0.envelope.expiresAt <= ms }) || state.receipts.contains(where: { $0.receipt.expiresAt <= ms }) || state.messages.contains(where: { $0.outgoing && [.queued, .forwarding].contains($0.status) && $0.envelope.expiresAt <= ms }) || (tickNumber % 30 == 0 && !state.seenRelay.isEmpty) {
+            if state.relay.contains(where: { $0.envelope.expiresAt <= ms }) || state.receipts.contains(where: { $0.receipt.expiresAt <= ms }) || state.messages.contains(where: { $0.outgoing && [.queued, .forwarding].contains($0.status) && $0.envelope.expiresAt <= ms }) || (tickNumber % 30 == 0 && (!state.seenRelay.isEmpty || !(state.deletedMessageIDs ?? [:]).isEmpty)) {
                 try store.transaction { state in
                     state.relay.removeAll { $0.envelope.expiresAt <= ms }
                     state.receipts.removeAll { $0.receipt.expiresAt <= ms }
                     state.seenRelay = state.seenRelay.filter { $0.value > now() }
+                    state.deletedMessageIDs = state.deletedMessageIDs?.filter { $0.value > now() }
                     for i in state.messages.indices where state.messages[i].outgoing && [.queued, .forwarding].contains(state.messages[i].status) && state.messages[i].envelope.expiresAt <= ms { state.messages[i].status = .expired }
                 }; changed()
             }
@@ -121,6 +131,12 @@ final class SpotchatMessageStore: ObservableObject {
         receive(packet, from: peer, nostrSender: nil)
     }
     func receive(_ packet: SpotchatPacket, from peer: PeerID?, nostrSender: String?) {
+        guard !retired else { return }
+        if let peer, let key = transport.noiseSessionPublicKeyData(for: peer), state.blocked?[SpotchatContactCard.userID(key)] != nil { return }
+        if let nostrSender, state.blocked?.values.contains(where: { $0.nostrKey == nostrSender }) == true { return }
+        if let card = packet.card, isBlocked(card) { return }
+        if let envelope = packet.envelope, isBlocked(envelope.sender) || isBlocked(envelope.recipient) { return }
+        if let receipt = packet.receipt, isBlocked(receipt.sender) || isBlocked(receipt.destination) { return }
         let source = peer?.id ?? nostrSender ?? "unknown"
         let old = ingressRate[source] ?? (now(), 0)
         let progress = now().timeIntervalSince(old.0) >= 60 ? (now(), 0) : old
@@ -160,6 +176,7 @@ final class SpotchatMessageStore: ObservableObject {
     }
     private func accept(_ envelope: SpotchatEnvelope, via peer: PeerID?, hop: Int, internet: Bool) throws {
         guard internet || (1...envelope.hopLimit).contains(hop) else { throw SpotchatFailure.invalidMessage }
+        if state.deletedMessageIDs?[envelope.id] != nil { return }
         guard envelope.recipient.noiseKey == ownCard.noiseKey,
               envelope.recipient.signingKey == ownCard.signingKey,
               envelope.recipient.nostrKey == ownCard.nostrKey else { throw SpotchatFailure.invalidMessage }
@@ -261,7 +278,7 @@ final class SpotchatMessageStore: ObservableObject {
         }
     }
     private func routeOutbox() {
-        guard foreground else { return }
+        guard foreground, !retired else { return }
         var sent = 0
         for message in state.messages.filter({ $0.outgoing && [.queued, .forwarding].contains($0.status) }) {
             if sent >= 4 { break }
@@ -283,7 +300,7 @@ final class SpotchatMessageStore: ObservableObject {
                     if let courier { sendPacket(packet, to: courier.key) }
                     if internet?.connected == true {
                         internet?.send(packet, to: message.envelope.recipient) { [weak self] accepted in
-                            guard let self, accepted else { return }
+                            guard let self, accepted, !self.retired else { return }
                             do { try self.store.transaction { state in
                                 if let i = state.messages.firstIndex(where: { $0.id == message.id }), [.queued, .forwarding].contains(state.messages[i].status) { state.messages[i].nostrAccepted = true; state.messages[i].status = .forwarding; state.messages[i].deliveryTransport = "nostr" }
                             }; self.changed() } catch { self.fail(error) }
@@ -294,7 +311,7 @@ final class SpotchatMessageStore: ObservableObject {
         }
     }
     private func routeRelay() {
-        guard foreground else { return }
+        guard foreground, !retired else { return }
         var sent = 0
         for copy in state.relay {
             if sent >= 8 { break }
@@ -314,7 +331,7 @@ final class SpotchatMessageStore: ObservableObject {
         }
     }
     private func routeReceipts() {
-        guard foreground else { return }
+        guard foreground, !retired else { return }
         var sent = 0
         for stored in state.receipts where now().timeIntervalSince(stored.lastAttempt) >= 30 {
             if sent >= 8 { break }
@@ -333,15 +350,63 @@ final class SpotchatMessageStore: ObservableObject {
                 if let direct { sendPacket(packet, to: direct) }
                 for pair in next { sendPacket(packet, to: pair.key) }
                 if useInternet { internet?.send(packet, to: receipt.destination) { [weak self] accepted in
-                    guard let self, accepted else { return }
+                    guard let self, accepted, !self.retired else { return }
                     do { try self.store.transaction { state in if let i = state.receipts.firstIndex(where: { $0.receipt.key == receipt.key }) { state.receipts[i].nostrAccepted = true } } } catch { self.fail(error) }
                 } }
             } catch { fail(error) }
         }
     }
     private func sendPacket(_ packet: SpotchatPacket, to peer: PeerID) {
-        guard let bytes = try? SpotchatCoding.encode(packet), bytes.count <= 24_000 else { return }
+        guard !retired, let bytes = try? SpotchatCoding.encode(packet), bytes.count <= 24_000 else { return }
         wire.sendSpotchatPacket(bytes, to: peer)
+    }
+    func isBlocked(_ card: SpotchatContactCard) -> Bool { state.blocked?[card.id] != nil }
+    func deleteConversation(with card: SpotchatContactCard, removeContact: Bool = false) throws {
+        guard !retired else { throw SpotchatFailure.unavailableIdentity }
+        let conversationID = SpotchatConversation.identifier(ownCard.id, card.id)
+        try store.transaction { state in
+            // Ignore old relay/Nostr replays after local deletion. New messages
+            // from a retained contact may create a new conversation.
+            if state.deletedMessageIDs == nil { state.deletedMessageIDs = [:] }
+            for message in state.messages where message.envelope.conversationID == conversationID {
+                let expiry = Date(timeIntervalSince1970: Double(message.envelope.expiresAt) / 1000)
+                if expiry > now() { state.deletedMessageIDs?[message.id] = expiry }
+            }
+            state.messages.removeAll { $0.envelope.conversationID == conversationID }
+            state.conversations.removeAll { $0.id == conversationID }
+            state.receipts.removeAll { $0.receipt.sender.id == card.id || $0.receipt.destination.id == card.id }
+            if removeContact {
+                state.contacts.removeAll { $0.id == card.id }
+                state.requests.removeAll { $0.id == card.id }
+            }
+        }
+        if activeContact == card.id { activeContact = nil }
+        changed()
+    }
+    func setBlocked(_ card: SpotchatContactCard, blocked: Bool) throws {
+        guard !retired else { throw SpotchatFailure.unavailableIdentity }
+        try card.validate()
+        try store.transaction { state in
+            if state.blocked == nil { state.blocked = [:] }
+            if blocked {
+                guard state.blocked!.count < 2000 || state.blocked?[card.id] != nil else { throw SpotchatFailure.quota }
+                state.blocked?[card.id] = card
+                state.requests.removeAll { $0.id == card.id }
+                state.relay.removeAll { $0.envelope.sender.id == card.id || $0.envelope.recipient.id == card.id || $0.depositor == card.id }
+                state.receipts.removeAll { $0.receipt.sender.id == card.id || $0.receipt.destination.id == card.id }
+                for i in state.messages.indices where state.messages[i].outgoing && state.messages[i].envelope.recipient.id == card.id && [.queued, .forwarding].contains(state.messages[i].status) {
+                    state.messages[i].status = .cancelled
+                }
+            } else { state.blocked?.removeValue(forKey: card.id) }
+        }
+        if blocked { nearby = nearby.filter { $0.value.id != card.id } }
+        changed()
+    }
+    // Prevent all delayed callbacks from saving or sending after profile deletion.
+    func retire() {
+        retired = true; foreground = false; activeContact = nil
+        internet?.received = nil; internet?.stop()
+        nearby.removeAll(); helloTimes.removeAll(); ingressRate.removeAll()
     }
     private func changed() { revision &+= 1 }
     private func fail(_ error: Error) { onError?(error.localizedDescription) }

@@ -18,7 +18,7 @@ struct SpotchatConversation: Codable, Identifiable {
     }
 }
 enum SpotchatDelivery: String, Codable {
-    case queued, forwarding, delivered, read, expired
+    case queued, forwarding, delivered, read, expired, cancelled
     var label: String {
         switch self {
         case .queued: return "В очереди"
@@ -26,6 +26,7 @@ enum SpotchatDelivery: String, Codable {
         case .delivered: return "Доставлено"
         case .read: return "Прочитано"
         case .expired: return "Срок доставки истёк"
+        case .cancelled: return "Отменено"
         }
     }
 }
@@ -133,6 +134,9 @@ struct SpotchatDatabase: Codable {
     var relay: [SpotchatRelayCopy] = []
     var receipts: [SpotchatStoredReceipt] = []
     var seenRelay: [String: Date] = [:]
+    // Optional additions decode older v1 snapshots without discarding history.
+    var blocked: [String: SpotchatContactCard]?
+    var deletedMessageIDs: [String: Date]?
 }
 
 @MainActor

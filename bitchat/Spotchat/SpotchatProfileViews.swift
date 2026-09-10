@@ -47,6 +47,9 @@ struct SpotchatOwnProfileSheet: View {
                     if runtime.permanent != nil {
                         Button { showQR = true } label: { Label("Мой QR-код", systemImage: "qrcode") }
                     }
+                    NavigationLink { SpotchatPrivacySettings(runtime: runtime) } label: {
+                        Label("Настройки и поддержка", systemImage: "gearshape")
+                    }
                     if avatar != nil {
                         Button("Удалить фото", role: .destructive) { avatar = nil; selection = nil }
                             .font(.footnote).disabled(processing)
@@ -95,6 +98,7 @@ struct SpotchatOwnProfileSheet: View {
 struct SpotchatPeerProfileSheet: View {
     @ObservedObject var runtime: SpotchatRuntime
     let peer: SpotchatPeer
+    @Environment(\.dismiss) private var dismiss
     @State private var showPhoto = false
     private var profile: SpotchatProfile? { runtime.profile(for: peer.id) }
     var body: some View {
@@ -117,7 +121,7 @@ struct SpotchatPeerProfileSheet: View {
                     Text(runtime.displayName(peer)).font(.title.bold()).multilineTextAlignment(.center)
                     HStack(spacing: 5) {
                         Circle().fill(runtime.isNearby(peer.id) ? Color.green : Color.secondary).frame(width: 6, height: 6)
-                        Text(runtime.isNearby(peer.id) ? "Рядом" : "Сейчас не рядом")
+                        Text(runtime.isBlocked(peer.id) ? "Заблокирован" : (runtime.isNearby(peer.id) ? "Рядом" : "Сейчас не рядом"))
                             .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                     }
                 }
@@ -147,6 +151,12 @@ struct SpotchatPeerProfileSheet: View {
         .padding(.top, 60)
         .offset(y: -10)
         .background(Color(.systemBackground))
+        .overlay(alignment: .topTrailing) {
+            if let card = runtime.permanent?.card(for: peer.id) {
+                SpotchatContactActionsMenu(runtime: runtime, card: card, onDelete: { dismiss() })
+                    .padding(.trailing, 16).padding(.top, 12)
+            }
+        }
         .presentationDetents([.medium]).presentationDragIndicator(.visible)
         .onAppear { if profile == nil || runtime.profiles.failed.contains(peer.id) { runtime.profiles.refresh(peer.id) } }
         .fullScreenCover(isPresented: $showPhoto) {

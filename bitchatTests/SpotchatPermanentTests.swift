@@ -190,4 +190,64 @@ struct SpotchatPermanentTests {
         #expect(a.store.state.messages.first?.status == .forwarding)
     }
 
+    @Test func blockingPersistsAndRejectsDirectNostrAndCourierMessages() throws {
+        let clock = Clock(), a = try Node("Аня", clock: clock), b = try Node("Борис", clock: clock), c = try Node("Курьер", clock: clock)
+        try a.service.add(b.card, source: "QR"); try b.service.add(a.card, source: "QR")
+        #expect(a.service.send("Не отправлять после блокировки", to: b.card))
+        try a.service.setBlocked(b.card, blocked: true)
+        #expect(a.store.state.messages.first?.status == .cancelled)
+        #expect(!a.service.send("Запрещено", to: b.card))
+        #expect(throws: (any Error).self) { try a.service.add(b.card, source: "QR") }
+        #expect(b.service.send("Не принимать", to: a.card))
+        let packet = SpotchatPacket(envelope: b.store.state.messages[0].envelope, hopCount: 1)
+        connect(a,b,clock:clock)
+        a.service.receive(packet, from: b.wire.myPeerID, nostrSender: nil)
+        a.service.receive(packet, from: nil, nostrSender: b.card.nostrKey)
+        connect(a,c,clock:clock)
+        a.service.receive(packet, from: c.wire.myPeerID, nostrSender: nil)
+        #expect(a.store.state.messages.count == 1)
+        #expect(a.store.state.requests.isEmpty)
+        let decoded = try JSONDecoder().decode(SpotchatDatabase.self, from: SpotchatCoding.encode(a.store.state))
+        #expect(decoded.blocked?[b.card.id] != nil)
+        try a.service.setBlocked(b.card, blocked: false)
+        a.service.receive(packet, from: nil, nostrSender: b.card.nostrKey)
+        #expect(a.store.state.messages.count == 2)
+        #expect(a.store.state.messages.first?.status == .cancelled)
+    }
+    @Test func deletingHistoryStopsOutboxAndPreventsReplayButAllowsNewMessages() throws {
+        let clock = Clock(), a = try Node("Аня", clock: clock), b = try Node("Борис", clock: clock)
+        try a.service.add(b.card, source: "QR"); try b.service.add(a.card, source: "QR")
+        #expect(b.service.send("Старая история", to: a.card))
+        let packet = SpotchatPacket(envelope: b.store.state.messages[0].envelope, hopCount: 1)
+        a.service.receive(packet, from: nil, nostrSender: b.card.nostrKey)
+        #expect(a.service.send("Старая очередь", to: b.card))
+        try a.service.deleteConversation(with: b.card)
+        #expect(a.store.state.messages.isEmpty)
+        #expect(a.store.state.conversations.isEmpty)
+        #expect(a.store.state.contacts.count == 1)
+        a.service.receive(packet, from: nil, nostrSender: b.card.nostrKey)
+        #expect(a.store.state.messages.isEmpty)
+        // A new ID must be accepted even within the same timestamp, or when
+        // the sender's clock is slightly behind. Do not use a time cutoff.
+        #expect(b.service.send("Новый разговор", to: a.card))
+        a.service.receive(SpotchatPacket(envelope: b.store.state.messages[1].envelope, hopCount: 1), from: nil, nostrSender: b.card.nostrKey)
+        #expect(a.store.state.messages.count == 1)
+        try a.service.deleteConversation(with: b.card, removeContact: true)
+        #expect(a.store.state.contacts.isEmpty)
+        #expect(a.store.state.messages.isEmpty)
+        #expect(a.store.state.receipts.isEmpty)
+    }
+    @Test func oldDatabaseMigratesAndRetiredCoordinatorCannotReviveData() throws {
+        let clock = Clock(), a = try Node("Аня", clock: clock), b = try Node("Борис", clock: clock)
+        try a.service.add(b.card, source: "QR")
+        let data = try SpotchatCoding.encode(a.store.state)
+        let migrated = try JSONDecoder().decode(SpotchatDatabase.self, from: data)
+        #expect(migrated.blocked == nil && migrated.deletedMessageIDs == nil)
+        a.service.retire(); a.service.setActive(true); connect(a,b,clock:clock)
+        #expect(!a.service.send("После удаления", to: b.card))
+        a.service.receive(SpotchatPacket(card: b.card), from: nil, nostrSender: b.card.nostrKey)
+        #expect(a.store.state.requests.isEmpty)
+        #expect(a.wire.spotchatPackets.isEmpty)
+    }
+
 }

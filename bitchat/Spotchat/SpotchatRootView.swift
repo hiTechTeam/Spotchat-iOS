@@ -9,6 +9,7 @@ struct SpotchatRootView: View {
     @State private var showContacts = false
     @State private var invitation: SpotchatContactCard?
     @State private var selectedPeer: SpotchatPeer?
+    @State private var deleteChatPeer: SpotchatPeer?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -19,7 +20,13 @@ struct SpotchatRootView: View {
                             peerRow(peer)
                         }
                         .buttonStyle(.plain)
-                        .contextMenu { Button("Посмотреть профиль") { selectedPeer = peer } }
+                        .contextMenu {
+                            Button("Посмотреть профиль") { selectedPeer = peer }
+                            if runtime.permanent != nil { Button("Удалить чат", role: .destructive) { deleteChatPeer = peer } }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if runtime.permanent != nil { Button("Удалить", role: .destructive) { deleteChatPeer = peer } }
+                        }
                         .listRowInsets(EdgeInsets(top: 11, leading: 16, bottom: 11, trailing: 18))
                         .alignmentGuide(.listRowSeparatorLeading) { _ in 72 }
                     }
@@ -76,6 +83,21 @@ struct SpotchatRootView: View {
                     showContacts = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { path.append(peer) }
                 }
+            }
+            .confirmationDialog("Удалить чат?", isPresented: Binding(get: { deleteChatPeer != nil }, set: { if !$0 { deleteChatPeer = nil } }), titleVisibility: .visible) {
+                if let peer = deleteChatPeer {
+                    Button("Удалить чат", role: .destructive) {
+                        if let card = runtime.permanent?.card(for: peer.id) {
+                            do { try runtime.permanent?.deleteConversation(with: card) }
+                            catch { runtime.error = error.localizedDescription }
+                        }
+                        deleteChatPeer = nil
+                    }
+                }
+                Button("Отмена", role: .cancel) { deleteChatPeer = nil }
+            } message: { Text("История и очередь будут удалены на этом iPhone. Контакт и копии у собеседника сохранятся.") }
+            .onChange(of: runtime.chatPeers.map(\.id)) { ids in
+                if let last = path.last, !ids.contains(last.id) { path.removeAll() }
             }
             .onOpenURL { url in
                 do { invitation = try SpotchatContactCard.parse(url) }
@@ -286,7 +308,7 @@ struct SpotchatConversationView: View {
                     Text(name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
                     HStack(spacing: 4) {
                         Circle().fill(runtime.isNearby(peer.id) ? Color.green : Color.secondary).frame(width: 5, height: 5)
-                        Text(runtime.isNearby(peer.id) ? "Рядом" : "Не рядом").font(.system(size: 11))
+                        Text(runtime.isBlocked(peer.id) ? "Заблокирован" : (runtime.isNearby(peer.id) ? "Рядом" : "Не рядом")).font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                 }.accessibilityElement(children: .combine)
@@ -302,16 +324,19 @@ struct SpotchatConversationView: View {
         .sheet(isPresented: $showPeerProfile) {
             SpotchatPeerProfileSheet(runtime: runtime, peer: peer)
         }
-        .onChange(of: showPeerProfile) { visible in runtime.openConversation(visible ? nil : peer.id) }
+        .onChange(of: showPeerProfile) { visible in
+            runtime.openConversation(!visible && runtime.chatPeers.contains(where: { $0.id == peer.id }) ? peer.id : nil)
+        }
     }
 
     private var composer: some View {
         VStack(spacing: 8) {
+            if runtime.isBlocked(peer.id) { Text("Контакт заблокирован").font(.caption).foregroundStyle(.secondary) }
             HStack(alignment: .bottom, spacing: 8) {
                 HStack(alignment: .bottom, spacing: 0) {
                 TextField("Сообщение", text: $draft, prompt: Text("Сообщение").foregroundColor(Color(.secondaryLabel)), axis: .vertical)
                     .font(.body).lineLimit(1...5).focused($inputFocused)
-                    .textFieldStyle(.plain)
+                    .textFieldStyle(.plain).disabled(runtime.isBlocked(peer.id))
                     .padding(.horizontal, 16).padding(.vertical, 12)
                     .accessibilityIdentifier("spotchat.messageInput")
                     #if DEBUG && targetEnvironment(simulator)
@@ -342,7 +367,7 @@ struct SpotchatConversationView: View {
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(Color(.systemBackground))
     }
-    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (runtime.permanent != nil || runtime.isNearby(peer.id)) }
+    private var canSend: Bool { !runtime.isBlocked(peer.id) && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (runtime.permanent != nil || runtime.isNearby(peer.id)) }
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.22)) { proxy.scrollTo("conversation-bottom", anchor: .bottom) }
     }
@@ -389,7 +414,10 @@ struct SpotchatMessageBubble: View {
                 Label("Ожидаем связь", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.caption).foregroundStyle(.secondary).padding(.vertical, 4)
             }
-            if message.outgoing, case .failed = message.status {
+            if message.outgoing, message.deliveryLabel == "Отменено" {
+                Text("Отменено после блокировки").font(.caption).foregroundStyle(.secondary)
+            }
+            if message.outgoing, message.deliveryLabel != "Отменено", case .failed = message.status {
                 Button(action: retry) {
                     Label("Не доставлено · Повторить", systemImage: "arrow.clockwise")
                         .font(.system(size: 12)).foregroundStyle(.red).padding(.vertical, 8)

@@ -45,9 +45,12 @@ struct SpotchatContactsView: View {
                 }
                 Section("Сохранённые") {
                     ForEach((service?.state.contacts ?? []).filter { matches($0.card) }.sorted { $0.card.name < $1.card.name }) { contact in
-                        Button { open(contact.card, source: "saved") } label: {
-                            contactRow(contact.card, nearby: runtime.isNearby(contact.card.peerID), detail: nil, add: false)
-                        }.buttonStyle(.plain)
+                        HStack(spacing: 0) {
+                            Button { open(contact.card, source: "saved") } label: {
+                                contactRow(contact.card, nearby: runtime.isNearby(contact.card.peerID), detail: runtime.isBlocked(contact.card.peerID) ? "Заблокирован" : nil, add: false)
+                            }.buttonStyle(.plain)
+                            SpotchatContactActionsMenu(runtime: runtime, card: contact.card)
+                        }
                     }
                 }
             }

@@ -129,6 +129,7 @@ final class SpotchatProfiles: ObservableObject {
     private var packetRate: [PeerID: (Date, Int)] = [:]
     private var hints: [PeerID: Date] = [:]
     private var appActive = true
+    private var retired = false
     static let retryInterval: TimeInterval = 8
 
     init(name: String, store: SpotchatProfileStore = SpotchatProfileStore(),
@@ -137,7 +138,13 @@ final class SpotchatProfiles: ObservableObject {
         self.store = store; self.now = now; self.connected = connected; self.send = send
         own = store.loadOwn() ?? SpotchatProfile(name: name)
     }
+    func retire() {
+        retired = true; appActive = false
+        pending.removeAll(); peers.removeAll(); remote.removeAll(); loading.removeAll(); failed.removeAll()
+        own = SpotchatProfile(name: "")
+    }
     func save(_ profile: SpotchatProfile) throws {
+        guard !retired else { throw SpotchatFailure.unavailableIdentity }
         guard profile.valid else { throw CocoaError(.validationMissingMandatoryProperty) }
         try store.saveOwn(profile)
         own = profile
@@ -178,6 +185,7 @@ final class SpotchatProfiles: ObservableObject {
         }
     }
     private func emit(_ packet: SpotchatProfilePacket, to peer: PeerID) {
+        guard !retired else { return }
         guard connected(peer), let data = try? JSONEncoder().encode(packet), data.count <= SpotchatProfilePacket.maxWireBytes else { return }
         send(data, peer)
     }
@@ -189,6 +197,7 @@ final class SpotchatProfiles: ObservableObject {
         } else { emit(.init(kind: .query, request: item.request), to: peer) }
     }
     func receive(_ data: Data, from peer: PeerID) {
+        guard !retired else { return }
         guard connected(peer), data.count <= SpotchatProfilePacket.maxWireBytes,
               let packet = try? JSONDecoder().decode(SpotchatProfilePacket.self, from: data), packet.version == 1,
               packet.request.utf8.count <= 64 else { return }

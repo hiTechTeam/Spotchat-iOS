@@ -67,3 +67,27 @@ Recipient-signed receipts are carried along devices that held the original envel
   the message composer were also inspected on iOS 26.3.
 - Installed and launched on the user's iPhone 11 only. This update has not yet
   been exercised across two physical iPhones or a three-phone carrier route.
+
+## MVP privacy controls - 2026-09-10
+
+- Local block records pin the stable contact ID, apply to BLE, Nostr and carried
+  envelopes, survive restart and can be removed in profile settings. Pending
+  outgoing messages to blocked contacts are cancelled, not silently resumed.
+- Chat deletion removes local history, receipts and outbox; contact deletion
+  additionally removes the saved card. Existing blocks remain. Expiring message
+  ID tombstones reject old deliveries without dropping new messages when clocks
+  differ. Previously handed-off copies cannot be recalled remotely.
+- Profile deletion closes the runtime, Nostr and BLE admission before deleting
+  app files, preferences and owned Keychain entries. A durable deletion marker
+  keeps the app closed after interruption/failure; the user can retry. Successful
+  deletion remains a terminal screen until explicit creation of a fresh profile.
+- Public privacy policies and support email are in hiTechTeam/Spotchat-info;
+  the source repository remains private. Support is admin@tgtelescan.ru.
+- Tests use temporary file roots and an isolated MockKeychain for destructive
+  operations. No real user profile on either physical iPhone was deleted.
+- Validation: 30 deterministic Spotchat tests passed across the privacy and
+  existing runtime/profile suites. The final focused run passed 13 identity,
+  delivery, block, history-deletion and profile-lifecycle tests on iOS 18.5.
+  The signed Debug iPhone build also succeeded. Interactive inspection of the
+  new menus could not finish because simulator UI automation timed out; these
+  controls still need an on-device smoke check before the TestFlight upload.

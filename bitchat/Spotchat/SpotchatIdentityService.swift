@@ -49,13 +49,14 @@ enum SpotchatCoding {
     }
 }
 enum SpotchatFailure: LocalizedError {
-    case invalidContact, unavailableIdentity, invalidMessage, storage, quota
+    case invalidContact, unavailableIdentity, invalidMessage, storage, quota, blocked
     var errorDescription: String? {
         switch self {
         case .invalidContact: return "Не удалось проверить контакт Spotchat. Попробуйте обменяться QR-кодами ещё раз."
         case .unavailableIdentity: return "Ключи профиля недоступны. Разблокируйте iPhone и снова откройте Spotchat."
         case .invalidMessage: return "Не удалось проверить сообщение."
         case .storage: return "Не удалось сохранить данные. Проверьте свободное место на iPhone."
+        case .blocked: return "Контакт заблокирован. Сначала разблокируйте его в настройках профиля."
         case .quota: return "Очередь заполнена. Дождитесь доставки сообщений."
         }
     }

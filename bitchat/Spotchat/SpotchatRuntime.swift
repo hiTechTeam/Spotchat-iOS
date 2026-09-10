@@ -39,6 +39,8 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     private(set) var permanent: SpotchatMessageStore?
     private var permanentChanges: AnyCancellable?
     private var setupFailed = false
+    private var retired = false
+    var deleteProfileHandler: (() -> Void)?
     private var profileChanges: AnyCancellable?
     private(set) var activePeer: PeerID?
     private var appActive = true
@@ -179,8 +181,20 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         #endif
     }
 
+    func retireForDeletion() {
+        retired = true; setupFailed = true
+        timer?.cancel(); timer = nil
+        permanent?.retire()
+        profiles.retire()
+        transport.eventDelegate = nil; transport.peerEventsDelegate = nil
+        if let ble = transport as? BLEService { ble.suspendForPanicReset() }
+        else { transport.stopServices() }
+        permanentChanges?.cancel(); profileChanges?.cancel()
+        permanent = nil; messages = []; peers = []; knownPeers = [:]; unreadMessageIDs = []
+    }
+
     func start(runTimer: Bool = true) {
-        guard !started, !setupFailed else { return }
+        guard !started, !setupFailed, !retired else { return }
         started = true
         transport.startServices()
         permanent?.start()
@@ -192,6 +206,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     func setAppActive(_ active: Bool) {
+        guard !retired else { return }
         guard appActive != active else { return }
         appActive = active
         profiles.setAppActive(active)
@@ -222,6 +237,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     func saveProfile(name: String, bio: String, avatar: Data?) -> Bool {
+        guard !retired else { return false }
         guard let valid = InputValidator.validateNickname(name), valid.utf8.count <= 64 else {
             error = "Введите короткое имя без служебных символов."; return false
         }
@@ -276,6 +292,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
             case .delivered: status = .delivered(to: card.name, at: stored.deliveredAt ?? Date())
             case .read: status = .read(by: card.name, at: stored.readAt ?? Date())
             case .expired: status = .failed(reason: "Срок доставки истёк")
+            case .cancelled: status = .failed(reason: "Отменено после блокировки")
             }
             return SpotchatMessage(id: stored.id, peerID: card.peerID, text: stored.text,
                 date: Date(timeIntervalSince1970: Double(stored.envelope.timestamp) / 1000), outgoing: stored.outgoing,
@@ -300,6 +317,14 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         conversation(peer).filter { !$0.outgoing && unreadMessageIDs.contains("\(peer.id):\($0.id)") }.count
     }
 
+    func isBlocked(_ peer: PeerID) -> Bool {
+        guard let permanent, let card = permanent.card(for: peer) else { return false }
+        return permanent.isBlocked(card)
+    }
+    private func isBlockedSession(_ peer: PeerID) -> Bool {
+        guard let key = transport.noiseSessionPublicKeyData(for: peer) else { return false }
+        return permanent?.state.blocked?[SpotchatContactCard.userID(key)] != nil
+    }
     func isNearby(_ peer: PeerID) -> Bool {
         guard bluetoothState == .poweredOn else { return false }
         if let permanent, let card = permanent.card(for: peer) { return permanent.session(for: card) != nil }
@@ -360,6 +385,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     func tick() {
+        guard !retired else { return }
         didUpdatePeerSnapshots(transport.currentPeerSnapshots())
         if appActive {
             if transport is SpotchatProfileTransporting, bluetoothState == .poweredOn { profiles.tick() }
@@ -409,8 +435,9 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     func didUpdatePeerSnapshots(_ snapshots: [TransportPeerSnapshot]) {
+        guard !retired else { return }
         let current = now()
-        let connected = snapshots.filter { bluetoothState == .poweredOn && $0.peerID != transport.myPeerID && $0.isConnected }
+        let connected = snapshots.filter { bluetoothState == .poweredOn && $0.peerID != transport.myPeerID && $0.isConnected && !isBlockedSession($0.peerID) }
         let ids = Set(connected.map(\.peerID))
         #if DEBUG
         if defaults.string(forKey: "SpotchatSelfTestRun") != nil {
@@ -428,6 +455,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
     }
 
     func didReceiveTransportEvent(_ event: TransportEvent) {
+        guard !retired else { return }
         switch event {
         case .bluetoothStateUpdated(let state):
             bluetoothState = state
@@ -436,6 +464,7 @@ final class SpotchatRuntime: ObservableObject, TransportEventDelegate, Transport
         case .peerConnected, .peerDisconnected, .peerListUpdated:
             didUpdatePeerSnapshots(transport.currentPeerSnapshots())
         case .noisePayloadReceived(let peer, let type, let data, let date):
+            guard !isBlockedSession(peer) else { return }
             if type == .spotchatEnvelope { permanent?.receiveBytes(data, from: peer); return }
             if permanent != nil && type != .spotchatProfile { return }
             switch type {
