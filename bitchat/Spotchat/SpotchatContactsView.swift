@@ -8,6 +8,7 @@ import SwiftUI
 extension SpotchatContactCard: Identifiable {}
 
 struct SpotchatContactsView: View {
+    private static let testFlightURL = URL(string: "https://testflight.apple.com/join/C6hdFUgr")!
     @ObservedObject var runtime: SpotchatRuntime
     var select: (SpotchatPeer) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -62,14 +63,14 @@ struct SpotchatContactsView: View {
             .sheet(isPresented: $showPhoneBook) {
                 SpotchatPhoneBook { contact in
                     showPhoneBook = false
-                    guard let card = service?.ownCard, let url = try? card.invitation() else { return }
                     let name = CNContactFormatter.string(from: contact, style: .fullName) ?? ""
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        share = SpotchatShareItem(text: "\(name.isEmpty ? "Привет" : name), добавь меня в Spotchat. Открой приглашение в установленном приложении:", url: url)
+                        let greeting = name.isEmpty ? "Привет!" : "\(name), привет!"
+                        share = SpotchatShareItem(text: "\(greeting) Установи Spotchat, чтобы общаться без интернета через Bluetooth:\n\(Self.testFlightURL.absoluteString)\n\nПосле установки добавим друг друга по QR-коду или Bluetooth.")
                     }
                 }
             }
-            .sheet(item: $share) { SpotchatShareSheet(items: [$0.text, $0.url]) }
+            .sheet(item: $share) { SpotchatShareSheet(items: [$0.text]) }
             .sheet(item: $invitation) { card in SpotchatContactConfirmation(card: card) { open(card, source: "invitation") } }
         }.tint(.blue)
     }
@@ -119,7 +120,7 @@ struct SpotchatQRView: View {
                         .frame(maxWidth: 300).accessibilityLabel("QR-код контакта Spotchat")
                     Text("Покажите этот код другому человеку.\nДля добавления интернет не нужен.")
                         .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    ShareLink(item: url) { Label("Поделиться приглашением", systemImage: "square.and.arrow.up") }
+                    ShareLink(item: Self.appInvitationText) { Label("Пригласить в Spotchat", systemImage: "square.and.arrow.up") }
                 }
             }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(.systemBackground))
@@ -127,6 +128,7 @@ struct SpotchatQRView: View {
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } } }
         }
     }
+    private static let appInvitationText = "Установи Spotchat, чтобы общаться без интернета через Bluetooth:\nhttps://testflight.apple.com/join/C6hdFUgr\n\nПосле установки добавим друг друга по QR-коду или Bluetooth."
     private func qr(_ text: String) -> UIImage? {
         let filter = CIFilter.qrCodeGenerator(); filter.message = Data(text.utf8); filter.correctionLevel = "M"
         guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 6, y: 6)), let image = CIContext().createCGImage(output, from: output.extent) else { return nil }
@@ -180,7 +182,7 @@ struct SpotchatPhoneBook: UIViewControllerRepresentable {
         func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) { selected(contact) }
     }
 }
-struct SpotchatShareItem: Identifiable { let id = UUID(); let text: String; let url: URL }
+struct SpotchatShareItem: Identifiable { let id = UUID(); let text: String }
 struct SpotchatShareSheet: UIViewControllerRepresentable {
     let items: [Any]
     func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: items, applicationActivities: nil) }
