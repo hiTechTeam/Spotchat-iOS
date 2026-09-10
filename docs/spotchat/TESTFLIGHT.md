@@ -51,6 +51,23 @@ Public privacy policy: https://github.com/hiTechTeam/Spotchat-info/blob/main/PRI
 
 Support: admin@tgtelescan.ru
 
+## External beta — 2026-09-10
+
+- Internal group: **Spotchat Internal**. Build **0.1.0 (1)** is available to
+  the App Store Connect user `r66cha@gmail.com`.
+- External group: **Spotchat Beta**.
+- Build **0.1.0 (1)** was submitted to Beta App Review and its current status
+  is **Waiting for Review**.
+- Public invitation: https://testflight.apple.com/join/C6hdFUgr
+- Public-link limit: **100 testers**. Testers cannot join until Apple approves
+  a build in the external group.
+- Export compliance declares standard encryption implemented by the app in
+  addition to Apple's operating-system encryption. Distribution in France is
+  disabled for this declaration; enabling it requires the applicable French
+  encryption documentation.
+
+External group: https://appstoreconnect.apple.com/teams/29d8cd9c-3fd3-4ff3-bb0e-d7d37c876985/apps/6810787268/testflight/groups/40ee36aa-23ba-4be8-abc1-b70bd6263528
+
 The binary includes end-to-end encryption beyond system TLS. Do not declare
 that it contains no encryption merely to bypass the export-compliance form.
 Uploading a build does not itself approve external beta testing or an App Store
