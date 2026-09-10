@@ -5,9 +5,9 @@ IPHONEOS_DEPLOYMENT_TARGET = 16.0
 MACOSX_DEPLOYMENT_TARGET = 13.0
 SWIFT_VERSION = 5.0
 
-// Configure your own team in Local.xcconfig for device builds.
-DEVELOPMENT_TEAM =
+// App Store Connect team. Debug can override this in Local.xcconfig.
+DEVELOPMENT_TEAM = SDL7K9875S
 CODE_SIGN_STYLE = Automatic
 
-PRODUCT_BUNDLE_IDENTIFIER = com.hitechteam.spotchat
-APP_GROUP_ID = group.com.hitechteam.spotchat
+PRODUCT_BUNDLE_IDENTIFIER = hiTeam.Spotchat
+APP_GROUP_ID = group.hiTeam.Spotchat
