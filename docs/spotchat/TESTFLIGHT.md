@@ -11,6 +11,19 @@ The Connect listing uses **Spotchat — Offline Chat** because **Spotchat** alon
 was unavailable. The Home Screen display name remains **Spotchat**.
 Primary listing language: Russian. SKU: `Spotchat-iOS`.
 
+## First upload — 2026-09-10
+
+- App Store Connect app ID: `6810787268`.
+- Version/build: **0.1.0 (1)**.
+- Release archive and App Store distribution export succeeded.
+- Apple confirmed **Upload succeeded** at 22:02 Moscow time and reported that
+  the uploaded package was processing.
+- Local archive: `.DerivedData/Archives/Spotchat-0.1.0-1.xcarchive`.
+- Exported IPA: `.DerivedData/Distribution/Spotchat-0.1.0-1/bitchat.ipa`.
+- The user verified the privacy/support update on their iPhone before upload.
+
+Connect: https://appstoreconnect.apple.com/apps/6810787268/distribution
+
 ## Build and upload
 
 Run from the repository root using the signed-in Xcode account:
