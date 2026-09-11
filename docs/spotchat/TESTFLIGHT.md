@@ -56,8 +56,8 @@ Support: admin@tgtelescan.ru
 - Internal group: **Spotchat Internal**. Build **0.1.0 (1)** is available to
   the App Store Connect user `r66cha@gmail.com`.
 - External group: **Spotchat Beta**.
-- Build **0.1.0 (1)** was submitted to Beta App Review and its current status
-  is **Waiting for Review**.
+- Build **0.1.0 (1)** was submitted to Beta App Review.
+  Approval was verified on 2026-09-11.
 - Public invitation: https://testflight.apple.com/join/C6hdFUgr
 - Public-link limit: **100 testers**. Testers cannot join until Apple approves
   a build in the external group.
@@ -72,3 +72,23 @@ The binary includes end-to-end encryption beyond system TLS. Do not declare
 that it contains no encryption merely to bypass the export-compliance form.
 Uploading a build does not itself approve external beta testing or an App Store
 release; verify the processing/compliance state in Connect.
+
+## Invitation update — 2026-09-11
+
+Build **0.1.0 (2)** contains the readable TestFlight invitation from commit
+`91517e5`, using https://testflight.apple.com/join/C6hdFUgr in both sharing flows.
+The URL was also verified in the archived binary.
+
+The interrupted export actually finished uploading on 2026-09-10 at 22:31
+Moscow time. Archive distribution metadata reports **Uploaded to Apple**, and
+Connect confirms build 2 has completed processing. Do not upload build 2 again.
+The next new upload must increment the build number beyond 2.
+
+Archive: `.DerivedData/Archives/Spotchat-0.1.0-2.xcarchive`.
+Connect build ID: `a445f2ad-83d6-4c2a-8c11-e28cc06ef41d`.
+This archive predates the ongoing local UI changes.
+
+On 2026-09-11, export compliance was completed with the same answers as build 1
+(standard app encryption; no distribution in France). Build 2 was added to
+**Spotchat Beta**, submitted, and Connect immediately showed **Approved**.
+The public group invitation remains https://testflight.apple.com/join/C6hdFUgr.
